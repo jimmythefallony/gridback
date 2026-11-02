@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.dSYM
+*.ipa
+.swift-version
