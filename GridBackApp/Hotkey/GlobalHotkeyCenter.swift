@@ -94,7 +94,8 @@ private func gridBackHotKeyCallback(
         EventParamName(kEventParamDirectObject),
         EventParamType(typeEventHotKeyID),
         nil,
-        ByteCount(MemoryLayout<EventHotKeyID>.size),
+        // Swift imports Carbon's ByteCount parameter as Int.
+        MemoryLayout<EventHotKeyID>.size,
         nil,
         &identity
     )
