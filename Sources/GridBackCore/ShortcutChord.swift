@@ -55,7 +55,9 @@ public struct ShortcutChord: Codable, Equatable, Sendable {
     }
 }
 
-public enum ShortcutRejection: Equatable, Sendable {
+/// Why a key combination cannot be saved as the shortcut.
+/// This is an `Error` because the recorder returns it from `Result`.
+public enum ShortcutRejection: Error, Equatable, Sendable {
     case needsModifier
     case modifierKeyOnly
 }
