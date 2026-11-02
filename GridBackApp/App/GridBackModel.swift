@@ -171,9 +171,13 @@ final class GridBackModel: ObservableObject {
                 case .failure(let error):
                     self.log.error("Launch failed for \(record.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     self.showLaunchError(String(localized: "Couldn't open \(record.displayName)."))
-                case .success(let application):
-                    if let application {
-                        NSApp.yield(to: application)
+                case .success(let launched):
+                    if let launched {
+                        // Hand the foreground to the app we just opened.
+                        // macOS 14+ calls this yieldActivation(to:), then
+                        // activate(from:options:) on the launched app.
+                        NSApp.yieldActivation(to: launched)
+                        _ = launched.activate(from: .current, options: [])
                     }
                     self.hideOverlay()
                 }
