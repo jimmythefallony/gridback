@@ -31,10 +31,6 @@
 			isa = PBXBuildFile;
 			fileRef = A32648E98D1B94E106BA702D;
 		};
-		5E49DAC16AFB0C8FB645575B /* PBXBuildFile */ = {
-			isa = PBXBuildFile;
-			fileRef = 9FCD45FD2CD9299E30A9FFC2;
-		};
 		C95FE7F2ED6827150774FADB /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			fileRef = 9F5DF81391628D6174D8C801;
@@ -103,6 +99,10 @@
 			isa = PBXBuildFile;
 			fileRef = B36D39777581103D750303F1;
 		};
+		E7A1C4B92F6D48B0A1C3D5E7 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = F8B2D5C03E7E49C1B2D4E6F8;
+		};
 		0A0000000000000000000019 /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			productRef = 0A0000000000000000000017;
@@ -158,12 +158,6 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = DirectoryWatcher.swift;
-			sourceTree = "<group>";
-		};
-		9FCD45FD2CD9299E30A9FFC2 /* DroppedAppID.swift */ = {
-			isa = PBXFileReference;
-			lastKnownFileType = sourcecode.swift;
-			path = DroppedAppID.swift;
 			sourceTree = "<group>";
 		};
 		9F5DF81391628D6174D8C801 /* AppGridView.swift */ = {
@@ -274,6 +268,12 @@
 			path = SearchTests.swift;
 			sourceTree = "<group>";
 		};
+		F8B2D5C03E7E49C1B2D4E6F8 /* GridInteractionTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = GridInteractionTests.swift;
+			sourceTree = "<group>";
+		};
 		0A0000000000000000000014 /* GridBack.app */ = {
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
@@ -336,14 +336,6 @@
 			path = Catalog;
 			sourceTree = "<group>";
 		};
-		1BA39D533C918BEFCDEA3A43 /* Drag */ = {
-			isa = PBXGroup;
-			children = (
-				9FCD45FD2CD9299E30A9FFC2,
-			);
-			path = Drag;
-			sourceTree = "<group>";
-		};
 		739E2478012398C1E51BB8FD /* Grid */ = {
 			isa = PBXGroup;
 			children = (
@@ -396,7 +388,6 @@
 			children = (
 				9FBFEA27B8B774AA8298F593,
 				062B4E46C5B2C4EDD95263AC,
-				1BA39D533C918BEFCDEA3A43,
 				739E2478012398C1E51BB8FD,
 				FD22D9F232F2AC493E6320CE,
 				7BEC95EE5555FF8D844D638C,
@@ -415,6 +406,7 @@
 				7992F67A5DDAD71621156356,
 				79723FE4E0C3BFE4CECD5B8F,
 				B36D39777581103D750303F1,
+				F8B2D5C03E7E49C1B2D4E6F8,
 			);
 			path = GridBackCoreTests;
 			sourceTree = "<group>";
@@ -553,7 +545,6 @@
 				2A144DA4C6CE5D7F04D1F08E,
 				03C6C88479B8F3E12AE5E164,
 				2FDCF1648EDB6F12547E16EB,
-				5E49DAC16AFB0C8FB645575B,
 				C95FE7F2ED6827150774FADB,
 				5DBBB5D939E2CA6A998DB161,
 				827AA5748EFF1CD0D6B48DEC,
@@ -577,6 +568,7 @@
 				B20A0BAE3EEBA5EC93495C79,
 				8D0DEAF3D167802E41DB5FE7,
 				58104959C104BEB803A7EB94,
+				E7A1C4B92F6D48B0A1C3D5E7,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

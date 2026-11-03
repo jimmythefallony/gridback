@@ -73,6 +73,20 @@ final class PersistenceStoreTests: XCTestCase {
         XCTAssertEqual(loaded.shortcut, .default)
     }
 
+    func testReorderedLayoutSurvivesSaveAndLoad() throws {
+        let directory = try makeDirectory()
+        let store = PersistenceStore(directoryURL: directory)
+        let original = Layout(
+            pages: [["a", "b", "c", "d"], ["e"]],
+            metrics: GridMetrics(columns: 2, rows: 2)
+        )
+        let moved = LayoutEditor.move(layout: original, appID: "a", toPage: 0, toSlot: 3)
+        XCTAssertEqual(moved.pages, [["b", "c", "d", "a"], ["e"]])
+        try store.save(PersistedState(layout: moved, shortcut: .default))
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.layout.pages, [["b", "c", "d", "a"], ["e"]])
+    }
+
     func testDefaultShortcutIsControlOptionG() {
         XCTAssertEqual(ShortcutChord.default.displayString, "⌃⌥G")
         XCTAssertNil(ShortcutChord.default.rejection())
