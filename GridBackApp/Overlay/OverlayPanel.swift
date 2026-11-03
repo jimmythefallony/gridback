@@ -22,12 +22,14 @@ final class OverlayPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         level = Self.overlayLevel
+        // macOS rejects canJoinAllSpaces together with moveToActiveSpace.
+        // Joining every Space keeps the grid on the primary display, including
+        // over a full-screen app, without pulling the window onto another display.
         collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
             .stationary,
-            .ignoresCycle,
-            .moveToActiveSpace
+            .ignoresCycle
         ]
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = false

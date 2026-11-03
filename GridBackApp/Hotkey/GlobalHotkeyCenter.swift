@@ -25,8 +25,11 @@ final class GlobalHotkeyCenter {
                 eventClass: OSType(kEventClassKeyboard),
                 eventKind: UInt32(kEventHotKeyPressed)
             )
+            // The handler has to sit on the same target RegisterEventHotKey
+            // notifies. The dispatcher still receives the key while another
+            // app is frontmost.
             let installed = InstallEventHandler(
-                GetApplicationEventTarget(),
+                GetEventDispatcherTarget(),
                 gridBackHotKeyCallback,
                 1,
                 &spec,
@@ -37,6 +40,7 @@ final class GlobalHotkeyCenter {
                 log.error("InstallEventHandler failed: \(Int(installed), privacy: .public)")
                 return installed
             }
+            log.info("InstallEventHandler ok on event dispatcher target")
         }
 
         unregisterHotKeyOnly()
@@ -45,13 +49,15 @@ final class GlobalHotkeyCenter {
             UInt32(chord.keyCode),
             chord.carbonModifiers,
             identity,
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             0,
             &hotKey
         )
         if status != noErr {
-            log.error("RegisterEventHotKey failed: \(Int(status), privacy: .public)")
+            log.error("RegisterEventHotKey failed: \(Int(status), privacy: .public) keyCode=\(chord.keyCode, privacy: .public) modifiers=\(chord.carbonModifiers, privacy: .public)")
             hotKey = nil
+        } else {
+            log.info("RegisterEventHotKey ok keyCode=\(chord.keyCode, privacy: .public) modifiers=\(chord.carbonModifiers, privacy: .public)")
         }
         return status
     }
@@ -85,6 +91,8 @@ private func gridBackHotKeyCallback(
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
     guard let event, let userData else {
+        Logger(subsystem: "com.jimmythefallony.GridBack", category: "hotkey")
+            .error("Hotkey callback missing event or user data")
         return OSStatus(eventNotHandledErr)
     }
     let target = Unmanaged<HotKeyTarget>.fromOpaque(userData).takeUnretainedValue()
@@ -99,7 +107,12 @@ private func gridBackHotKeyCallback(
         nil,
         &identity
     )
-    guard status == noErr else { return status }
+    let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "hotkey")
+    if status != noErr {
+        log.error("GetEventParameter failed: \(Int(status), privacy: .public)")
+        return status
+    }
+    log.info("Hotkey pressed signature=\(identity.signature, privacy: .public) id=\(identity.id, privacy: .public)")
     DispatchQueue.main.async {
         target.onPress()
     }
