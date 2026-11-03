@@ -1,38 +1,39 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct PageControls: View {
     @ObservedObject var model: GridBackModel
+    var page: Int
+    var pageCount: Int
 
     var body: some View {
         HStack(spacing: 16) {
-            pageArrow(systemName: "chevron.left", enabled: model.currentPage > 0, label: String(localized: "Previous page")) {
-                model.selectPage(model.currentPage - 1)
-            } onDropID: { id in
-                model.moveToPreviousPage(id)
+            pageArrow(systemName: "chevron.left", enabled: page > 0, label: String(localized: "Previous page")) {
+                model.selectPage(page - 1)
             }
 
             HStack(spacing: 8) {
-                ForEach(model.layout.pages.indices, id: \.self) { index in
+                ForEach(0..<pageCount, id: \.self) { index in
                     Circle()
-                        .fill(Color.white.opacity(index == model.currentPage ? 0.95 : 0.35))
-                        .frame(width: index == model.currentPage ? 8 : 6, height: index == model.currentPage ? 8 : 6)
+                        .fill(Color.white.opacity(index == page ? 0.95 : 0.35))
+                        .frame(width: index == page ? 8 : 6, height: index == page ? 8 : 6)
                         .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
                         .onTapGesture { model.selectPage(index) }
                         .accessibilityLabel(String(localized: "Page \(index + 1)"))
-                        .accessibilityAddTraits(index == model.currentPage ? .isSelected : [])
+                        .accessibilityAddTraits(index == page ? .isSelected : [])
                 }
             }
 
-            pageArrow(systemName: "chevron.right", enabled: model.currentPage + 1 < model.layout.pages.count, label: String(localized: "Next page")) {
-                model.selectPage(model.currentPage + 1)
-            } onDropID: { id in
-                model.moveToNextPage(id)
+            pageArrow(
+                systemName: "chevron.right",
+                enabled: page + 1 < pageCount,
+                label: String(localized: "Next page")
+            ) {
+                model.selectPage(page + 1)
             }
 
-            if !model.layout.pages.isEmpty {
-                Text(String(localized: "Page \(model.currentPage + 1) of \(model.layout.pages.count)"))
+            if pageCount > 0 {
+                Text(String(localized: "Page \(page + 1) of \(pageCount)"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.8))
                     .frame(minWidth: 88, alignment: .leading)
@@ -44,8 +45,7 @@ struct PageControls: View {
         systemName: String,
         enabled: Bool,
         label: String,
-        action: @escaping () -> Void,
-        onDropID: @escaping (String) -> Void
+        action: @escaping () -> Void
     ) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 16, weight: .semibold))
@@ -54,12 +54,5 @@ struct PageControls: View {
             .contentShape(Rectangle())
             .onTapGesture { if enabled { action() } }
             .accessibilityLabel(label)
-            .onDrop(of: [.plainText], isTargeted: nil) { providers in
-                DroppedAppID.load(from: providers) { id in
-                    guard let id else { return }
-                    onDropID(id)
-                }
-                return true
-            }
     }
 }

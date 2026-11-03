@@ -185,32 +185,14 @@ final class GridBackModel: ObservableObject {
         }
     }
 
-    func move(appID: String, toPage: Int, toSlot: Int) {
+    /// Saves an in-grid drag. Called once, when the finger lifts.
+    func commitReorder(_ layout: Layout, page: Int) {
         guard !isSearching else { return }
-        let updated = LayoutEditor.move(layout: layout, appID: appID, toPage: toPage, toSlot: toSlot)
-        guard updated != layout else { return }
-        layout = updated
-        clampPage()
-        save()
-    }
-
-    func moveToPreviousPage(_ appID: String) {
-        guard let path = layout.indexPath(of: appID), path.page > 0 else { return }
-        let destination = path.page - 1
-        let count = layout.pages[destination].count
-        let slot = LayoutEditor.slotThatStaysOnPage(itemCount: count, capacity: layout.metrics.capacity)
-        move(appID: appID, toPage: destination, toSlot: slot)
-        if let landed = layout.indexPath(of: appID) {
-            currentPage = landed.page
+        if layout != self.layout {
+            self.layout = layout
+            save()
         }
-    }
-
-    func moveToNextPage(_ appID: String) {
-        guard let path = layout.indexPath(of: appID) else { return }
-        move(appID: appID, toPage: path.page + 1, toSlot: 0)
-        if let landed = layout.indexPath(of: appID) {
-            currentPage = landed.page
-        }
+        selectPage(page)
     }
 
     func beginShortcutRecording() {
