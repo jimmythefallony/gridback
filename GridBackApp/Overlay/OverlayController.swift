@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 
 /// Owns the single overlay panel and moves it onto the primary display.
@@ -7,6 +8,7 @@ final class OverlayController: NSObject {
     private var panel: OverlayPanel?
     private var model: GridBackModel?
     private var screenObserver: NSObjectProtocol?
+    private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
         self.model = model
@@ -22,15 +24,24 @@ final class OverlayController: NSObject {
     }
 
     func show() {
-        guard let model else { return }
-        guard let screen = PrimaryDisplay.screen() else { return }
+        guard let model else {
+            log.error("Show skipped: overlay has no model")
+            return
+        }
+        guard let screen = PrimaryDisplay.screen() else {
+            log.error("Show skipped: no primary display")
+            return
+        }
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
         panel.setFrame(screen.frame, display: true)
         panel.alphaValue = 1
         NSApp.unhide(nil)
         NSApp.activate()
+        panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        let frame = panel.frame
+        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public)")
     }
 
     func hide() {
