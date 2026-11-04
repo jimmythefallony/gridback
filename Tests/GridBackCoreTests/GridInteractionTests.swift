@@ -96,3 +96,101 @@ final class PageSwipeTrackerTests: XCTestCase {
         XCTAssertNil(tracker.update(deltaX: 20, deltaY: 0, phase: .changed))
     }
 }
+
+final class LaunchGridLayoutTests: XCTestCase {
+    func testSideMarginsAreAboutElevenPercentOnALaptopAndALargeDisplay() {
+        for width in [1728.0, 2560.0, 3440.0] {
+            let layout = LaunchGridLayout.make(overlayWidth: width, overlayHeight: 1117, columns: 7, rows: 5)
+            XCTAssertEqual(layout.columns, 7, "width \(width)")
+            let fraction = layout.originX / width
+            XCTAssertEqual(fraction, 0.11, accuracy: 0.005, "width \(width)")
+            XCTAssertEqual(layout.gridWidth / width, 0.78, accuracy: 0.01, "width \(width)")
+            XCTAssertEqual(layout.originX, (width - layout.gridWidth) / 2, accuracy: 0.001)
+        }
+        let laptop = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
+        XCTAssertEqual(laptop.topChrome, laptop.bottomChrome)
+        XCTAssertLessThan(laptop.iconLabelGap, 6)
+    }
+
+    func testHitTestingIgnoresGapsAndMargins() {
+        let layout = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
+        XCTAssertNil(layout.hitSlot(x: 20, y: layout.originY + 40))
+        let slot = 0
+        let hitX = layout.originX + layout.columnCenter(slot)
+        let hitY = layout.originY + layout.rowCenter(slot)
+        XCTAssertEqual(layout.hitSlot(x: hitX, y: hitY), slot)
+        let gapX = layout.originX + layout.columnStride - 2
+        XCTAssertNil(layout.hitSlot(x: gapX, y: hitY))
+    }
+}
+
+final class PageSnapTests: XCTestCase {
+    func testHalfwayDragSettlesOnTheNextPage() {
+        let page = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -600,
+            velocityX: 0,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(page, 2)
+    }
+
+    func testShortDragWithoutFlickStaysPut() {
+        let page = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -200,
+            velocityX: 0,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(page, 1)
+    }
+
+    func testQuickFlickTurnsThePage() {
+        let page = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -80,
+            velocityX: -2800,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(page, 2)
+    }
+
+    func testRightwardSwipeMovesToThePreviousPage() {
+        let page = PageSnap.destination(
+            currentPage: 2,
+            pageCount: 4,
+            translationX: 700,
+            velocityX: 0,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(page, 1)
+    }
+
+    func testCannotSnapPastTheEnds() {
+        XCTAssertEqual(
+            PageSnap.destination(currentPage: 0, pageCount: 3, translationX: 900, velocityX: 2000, pageWidth: 1000),
+            0
+        )
+        XCTAssertEqual(
+            PageSnap.destination(currentPage: 2, pageCount: 3, translationX: -900, velocityX: -2000, pageWidth: 1000),
+            2
+        )
+    }
+
+    func testRubberBandMovesLessThanTheFinger() {
+        let banded = PageSnap.rubberBand(180, dimension: 1000)
+        XCTAssertGreaterThan(banded, 0)
+        XCTAssertLessThan(banded, 180)
+        let visual = PageSnap.visualPage(currentPage: 0, pageCount: 3, translationX: 180, pageWidth: 1000)
+        XCTAssertLessThan(visual, 0)
+        XCTAssertGreaterThan(visual, -0.2)
+    }
+
+    func testMiddleOfTheStripFollowsTheFingerOneToOne() {
+        let visual = PageSnap.visualPage(currentPage: 1, pageCount: 4, translationX: -250, pageWidth: 1000)
+        XCTAssertEqual(visual, 1.25, accuracy: 0.001)
+    }
+}

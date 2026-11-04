@@ -1,42 +1,36 @@
 import SwiftUI
 
 struct PageControls: View {
-    @ObservedObject var model: GridBackModel
-    var page: Int
     var pageCount: Int
+    var position: CGFloat
+    var onSelect: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 16) {
-            pageArrow(systemName: "chevron.left", enabled: page > 0, label: String(localized: "Previous page")) {
-                model.selectPage(page - 1)
+        HStack(spacing: 18) {
+            pageArrow(systemName: "chevron.left", enabled: pageCount > 0 && position > 0.5, label: String(localized: "Previous page")) {
+                onSelect(max(Int(position.rounded()) - 1, 0))
             }
 
             HStack(spacing: 8) {
                 ForEach(0..<pageCount, id: \.self) { index in
+                    let distance = min(abs(position - CGFloat(index)), 1)
                     Circle()
-                        .fill(Color.white.opacity(index == page ? 0.95 : 0.35))
-                        .frame(width: index == page ? 8 : 6, height: index == page ? 8 : 6)
+                        .fill(Color.white.opacity(0.95 - Double(distance) * 0.62))
+                        .frame(width: 8 - distance * 2.5, height: 8 - distance * 2.5)
                         .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
-                        .onTapGesture { model.selectPage(index) }
+                        .onTapGesture { onSelect(index) }
                         .accessibilityLabel(String(localized: "Page \(index + 1)"))
-                        .accessibilityAddTraits(index == page ? .isSelected : [])
+                        .accessibilityAddTraits(distance < 0.5 ? .isSelected : [])
                 }
             }
 
             pageArrow(
                 systemName: "chevron.right",
-                enabled: page + 1 < pageCount,
+                enabled: pageCount > 0 && position < CGFloat(pageCount - 1) - 0.5,
                 label: String(localized: "Next page")
             ) {
-                model.selectPage(page + 1)
-            }
-
-            if pageCount > 0 {
-                Text(String(localized: "Page \(page + 1) of \(pageCount)"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .frame(minWidth: 88, alignment: .leading)
+                onSelect(min(Int(position.rounded()) + 1, max(pageCount - 1, 0)))
             }
         }
     }
