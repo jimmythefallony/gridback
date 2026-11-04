@@ -2,11 +2,15 @@
 
 **A free, open-source replacement for the classic macOS Launchpad.**
 
+![Swiping between pages in GridBack, then searching for an app](docs/images/gridback-demo.gif)
+
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
 This is an early release, version 0.1.0. It is open source, and it is not a finished product.
 
 ## What works
+
+![A page of apps in GridBack](docs/images/gridback-grid.png)
 
 These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
