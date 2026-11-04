@@ -3,7 +3,7 @@
 **Working title:** GridBack  
 **Date:** 2 November 2026  
 **Audience:** Interviews, portfolio review, collaborators  
-**Status:** Agreed product direction for a public open-source learning project  
+**Status:** v0.1.0 is the public early release. Behavior listed in the README was checked on a real Mac running macOS 27 with Xcode 27.2. The app requires macOS 26 or later (the Xcode deployment target) and Apple silicon.  
 **Author context:** Non-technical product manager shipping small open-source apps in public
 
 ---
@@ -44,7 +44,7 @@ A **menu bar** macOS app that:
 
 ### Explicit non-goals for v0.1
 
-- Trackpad **pinch** / MultitouchSupport (planned after folders).
+- Trackpad **pinch** / MultitouchSupport (planned for v0.2, with folders).
 - **Folders**, nested organization, legacy Launchpad import.
 - Sparkle updates, Homebrew cask, notarization / Developer ID signing.
 - Telemetry, crash reporting, badges, hot corners, Dock integrations, multi-select, uninstall-other-apps, Intel / older macOS targets.
@@ -86,7 +86,7 @@ We'll find the first 10–20 testers in Reddit threads where people already say 
 1. **Pinch / private MultitouchSupport** — Deferred to later; still a roadmap risk (sandbox, stability, notarization, competing system UI). LaunchNext’s observed dual-UI pinch issue is a cautionary signal.
 2. **GPL-3.0 if reusing LaunchNext code** — Verified LaunchNext LICENSE is GPL-3.0. Reuse would constrain GridBack’s license; prefer a **clean separate implementation** unless the owner explicitly accepts GPL obligations after a documented audit.
 3. **Unsigned GitHub downloads** — macOS will warn / block; onboarding friction until signing/notarization.
-4. **Primary-display / Spaces / focus** — Overlay must appear correctly over ordinary and full-screen apps without wrong Spaces behavior; needs real Mac QA.
+4. **Primary-display / Spaces / focus** — Checked on macOS 27 with Xcode 27.2: the grid opens over a full-screen app, and with an external monitor it appears on the main display.
 5. **Working title / SEO / distribution** — Name, homepage, and Homebrew are later; early discovery may be limited.
 
 ## Roadmap
@@ -94,8 +94,7 @@ We'll find the first 10–20 testers in Reddit threads where people already say 
 | Version | Focus |
 |---------|--------|
 | **v0.1** | Menu bar + shortcut overlay, search, launch, drag reorder, local persist, unsigned GitHub Release |
-| **v0.2** | Flat folders (create / rename / move), remembered folder context |
-| **v0.3** | Validated trackpad pinch (and conflict handling), after a bounded feasibility prototype |
+| **v0.2** | Folders, the pinch gesture, and refinements from tester feedback |
 | **Later** | Sparkle, signing/notarization, Homebrew, opt-in telemetry/crash reporting, legacy import, badges, polish |
 
 ## How we work (gstack-inspired)
