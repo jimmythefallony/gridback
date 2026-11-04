@@ -24,7 +24,7 @@ These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 ## What this version does not do
 
-Folders are not in this version, and neither is the pinch gesture on the trackpad. Both are planned for version 0.2.
+Folders are not in this version, and neither is the pinch gesture on the trackpad. The Dock does not show over the grid. These are planned for a later version.
 
 The app is unsigned and not notarized. macOS will warn you the first time you open a downloaded copy. That is expected. See below.
 
@@ -34,7 +34,7 @@ An Apple silicon Mac running **macOS 26 or later**. That is the minimum set in t
 
 ## Install
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.1.0.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 
