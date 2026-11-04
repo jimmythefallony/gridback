@@ -98,13 +98,14 @@ final class PageSwipeTrackerTests: XCTestCase {
 }
 
 final class LaunchGridLayoutTests: XCTestCase {
-    func testSideMarginsAreAboutElevenPercentOnALaptopAndALargeDisplay() {
+    func testSideMarginsAreAboutNinePercentAndEachPageIsFullWidth() {
         for width in [1728.0, 2560.0, 3440.0] {
             let layout = LaunchGridLayout.make(overlayWidth: width, overlayHeight: 1117, columns: 7, rows: 5)
             XCTAssertEqual(layout.columns, 7, "width \(width)")
+            XCTAssertEqual(layout.pageWidth, width, accuracy: 0.001, "width \(width)")
             let fraction = layout.originX / width
-            XCTAssertEqual(fraction, 0.11, accuracy: 0.005, "width \(width)")
-            XCTAssertEqual(layout.gridWidth / width, 0.78, accuracy: 0.01, "width \(width)")
+            XCTAssertEqual(fraction, 0.09, accuracy: 0.005, "width \(width)")
+            XCTAssertEqual(layout.gridWidth / width, 0.82, accuracy: 0.01, "width \(width)")
             XCTAssertEqual(layout.originX, (width - layout.gridWidth) / 2, accuracy: 0.001)
         }
         let laptop = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)

@@ -15,6 +15,8 @@ public struct LaunchGridLayout: Equatable, Sendable {
     public var rowStride: Double
     public var originX: Double
     public var originY: Double
+    /// Full screen width. Each page is this wide; `originX` is padding inside the page.
+    public var pageWidth: Double
     public var gridWidth: Double
     public var gridHeight: Double
     public var topChrome: Double
@@ -34,9 +36,9 @@ public struct LaunchGridLayout: Equatable, Sendable {
         let rows = max(rows, 1)
         let topChrome = 108.0
         let bottomChrome = 108.0
-        // About 11% of the screen on each side, so the grid covers roughly
-        // three quarters of the width on a laptop and on a larger display.
-        let sideMargin = overlayWidth * 0.11
+        // About 9% of the screen on each side. The rest is the icon area,
+        // and that padding lives inside each full-width page.
+        let sideMargin = overlayWidth * 0.09
         let gridWidth = max(overlayWidth - sideMargin * 2, 1)
         let columnStride = gridWidth / Double(columns)
         var iconSide = min(112, max(64, columnStride * 0.58))
@@ -62,6 +64,7 @@ public struct LaunchGridLayout: Equatable, Sendable {
             rowStride: rowStride,
             originX: originX,
             originY: originY,
+            pageWidth: overlayWidth,
             gridWidth: gridWidth,
             gridHeight: gridHeight,
             topChrome: topChrome,

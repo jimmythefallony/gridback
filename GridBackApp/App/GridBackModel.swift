@@ -114,6 +114,13 @@ final class GridBackModel: ObservableObject {
         delegate?.gridBackShowSettings()
     }
 
+    func setSearchQuery(_ text: String) {
+        guard text != searchQuery else { return }
+        searchQuery = text
+        selectedResultIndex = 0
+        launchError = nil
+    }
+
     func selectPage(_ page: Int) {
         guard layout.pages.indices.contains(page) else { return }
         currentPage = page
