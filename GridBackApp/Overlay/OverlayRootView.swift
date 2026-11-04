@@ -46,15 +46,14 @@ struct OverlayRootView: View {
                         .padding(.bottom, chrome.bottomChrome)
                 } else {
                     pageStrip(pages: pages, layout: chrome)
-                        .frame(width: chrome.gridWidth, height: chrome.gridHeight)
-                        .clipped()
+                        .frame(width: chrome.pageWidth, height: chrome.gridHeight)
                         .position(
-                            x: chrome.originX + chrome.gridWidth / 2,
+                            x: overlay.size.width / 2,
                             y: chrome.originY + chrome.gridHeight / 2
                         )
                 }
 
-                SearchPill(query: model.searchQuery)
+                SearchPill(query: searchQueryBinding)
                     .position(x: overlay.size.width / 2, y: 58)
 
                 if !model.isSearching && !pages.isEmpty {
@@ -91,7 +90,7 @@ struct OverlayRootView: View {
             .simultaneousGesture(reorderGesture(layout: chrome))
             .background {
                 ScrollCatcher(isEnabled: reorder == nil && !model.isSearching) { event in
-                    handleScroll(event, pageWidth: chrome.gridWidth, pageCount: model.layout.pages.count)
+                    handleScroll(event, pageWidth: chrome.pageWidth, pageCount: model.layout.pages.count)
                 }
             }
             .onAppear {
@@ -110,25 +109,28 @@ struct OverlayRootView: View {
         reorder?.page ?? model.currentPage
     }
 
+    private var searchQueryBinding: Binding<String> {
+        Binding(
+            get: { model.searchQuery },
+            set: { model.setSearchQuery($0) }
+        )
+    }
+
     private func pageStrip(pages: [[String]], layout: LaunchGridLayout) -> some View {
-        Color.clear
-            .frame(width: layout.gridWidth, height: layout.gridHeight)
-            .overlay(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        AppGridView(
-                            model: model,
-                            layout: layout,
-                            ids: pages[index],
-                            hiddenID: reorder?.appID,
-                            blockLaunch: blockLaunch
-                        )
-                        .frame(width: layout.gridWidth, height: layout.gridHeight)
-                    }
-                }
-                .offset(x: -visualPage * layout.gridWidth)
+        HStack(spacing: 0) {
+            ForEach(pages.indices, id: \.self) { index in
+                AppGridView(
+                    model: model,
+                    layout: layout,
+                    ids: pages[index],
+                    hiddenID: reorder?.appID,
+                    blockLaunch: blockLaunch
+                )
             }
-            .clipped()
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .offset(x: -visualPage * layout.pageWidth)
+        .frame(width: layout.pageWidth, height: layout.gridHeight, alignment: .leading)
     }
 
     private func reorderGesture(layout: LaunchGridLayout) -> some Gesture {
@@ -160,7 +162,7 @@ struct OverlayRootView: View {
 
     private func updateReorder(at point: CGPoint, layout: LaunchGridLayout) {
         guard var session = reorder else { return }
-        let edge = GridDragResolver.pageEdge(x: Double(point.x), overlayWidth: layout.gridWidth + layout.originX * 2)
+        let edge = GridDragResolver.pageEdge(x: Double(point.x), overlayWidth: layout.pageWidth)
         let slot = edge == nil ? layout.hitSlot(x: Double(point.x), y: Double(point.y)) : nil
         session.hover(slot: slot, edge: edge)
         reorder = session

@@ -28,30 +28,37 @@ struct AppGridView: View {
                         guard !blockLaunch else { return }
                         model.launch(id: id)
                     }
-                    .position(x: layout.columnCenter(slot), y: layout.rowCenter(slot))
+                    .position(
+                        x: layout.originX + layout.columnCenter(slot),
+                        y: layout.rowCenter(slot)
+                    )
                 }
             }
         }
-        .frame(width: layout.gridWidth, height: layout.gridHeight)
+        .frame(width: layout.pageWidth, height: layout.gridHeight)
         .animation(.easeInOut(duration: 0.16), value: ids)
     }
 }
 
 struct SearchPill: View {
-    var query: String
+    @Binding var query: String
+    @FocusState var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-            Text(query.isEmpty ? String(localized: "Search") : query)
-                .lineLimit(1)
-                .foregroundStyle(.white.opacity(query.isEmpty ? 0.62 : 1))
+            TextField(String(localized: "Search"), text: $query)
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+                .foregroundStyle(.white)
         }
         .font(.system(size: 16, weight: .medium))
         .foregroundStyle(.white.opacity(0.9))
         .padding(.horizontal, 18)
         .frame(width: 280, height: 40)
         .background(Color.white.opacity(0.16), in: Capsule())
+        .contentShape(Capsule())
+        .onTapGesture { isFocused = true }
         .accessibilityLabel(String(localized: "Search"))
         .accessibilityValue(query)
     }

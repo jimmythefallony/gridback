@@ -60,10 +60,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
             }
             let modifiers = KeyModifiers(eventFlags: event.modifierFlags)
             let characters = event.characters ?? ""
+            if self.searchFieldIsEditing {
+                let action = SearchKeyRouting.action(
+                    keyCode: event.keyCode,
+                    characters: characters,
+                    modifiers: modifiers,
+                    isSearching: self.model.isSearching,
+                    columns: self.model.layout.metrics.columns
+                )
+                switch action {
+                case .startOrAppend, .backspace:
+                    return event
+                default:
+                    break
+                }
+            }
             if self.model.handleKeyDown(keyCode: event.keyCode, characters: characters, modifiers: modifiers) {
                 return nil
             }
             return event
         }
+    }
+
+    /// The search pill uses a text field. While it is focused, letters and
+    /// delete belong to that field so the cursor stays in sync.
+    private var searchFieldIsEditing: Bool {
+        NSApp.keyWindow?.firstResponder is NSTextView
     }
 }
