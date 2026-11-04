@@ -56,13 +56,15 @@ final class OverlayController: NSObject {
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
         let panel = OverlayPanel(screen: screen)
         let effect = NSVisualEffectView(frame: panel.contentView?.bounds ?? screen.frame)
-        effect.material = .hudWindow
+        effect.material = .fullScreenUI
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.autoresizingMask = [.width, .height]
 
         let hosting = NSHostingView(rootView: OverlayRootView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
         effect.addSubview(hosting)
         NSLayoutConstraint.activate([
             hosting.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
