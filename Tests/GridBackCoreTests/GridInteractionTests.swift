@@ -130,6 +130,12 @@ final class ScreenReserveTests: XCTestCase {
         XCTAssertEqual(right.left, 0, accuracy: 0.001)
     }
 
+    func testMenuBarReservesSpaceOnlyWhenTheTopInsetIsReal() {
+        XCTAssertFalse(ScreenReserve.none.menuBarReservesSpace)
+        XCTAssertFalse(ScreenReserve(top: 0, left: 0, bottom: 90, right: 0).menuBarReservesSpace)
+        XCTAssertTrue(ScreenReserve(top: 33, left: 0, bottom: 90, right: 0).menuBarReservesSpace)
+    }
+
     func testAutoHideDoesNotReserveADockEdge() {
         let reserve = ScreenReserve.occupying(
             screenX: 0, screenY: 0, screenWidth: 1512, screenHeight: 982,
@@ -209,6 +215,22 @@ final class LaunchGridLayoutTests: XCTestCase {
         XCTAssertEqual(layout.bottomChrome, plain.bottomChrome, accuracy: 0.001)
         XCTAssertEqual(layout.originX, plain.originX, accuracy: 0.001)
         XCTAssertEqual(layout.pageControlCenterY, plain.pageControlCenterY, accuracy: 0.001)
+    }
+
+    func testAutoHiddenMenuBarLeavesTheTopAtFullHeight() {
+        let hiddenBar = ScreenReserve(top: 0, left: 0, bottom: 90, right: 0)
+        let layout = LaunchGridLayout.make(
+            overlayWidth: 1728,
+            overlayHeight: 1117,
+            columns: 7,
+            rows: 5,
+            reserve: hiddenBar
+        )
+        let plain = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
+        XCTAssertFalse(hiddenBar.menuBarReservesSpace)
+        XCTAssertEqual(layout.topChrome, plain.topChrome, accuracy: 0.001)
+        XCTAssertEqual(layout.searchCenterY, plain.searchCenterY, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(layout.bottomChrome, 90 + 80)
     }
 
     func testHitTestingIgnoresGapsAndMargins() {

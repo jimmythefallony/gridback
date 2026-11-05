@@ -9,6 +9,10 @@ final class OverlayController: NSObject {
     private var panel: OverlayPanel?
     private var model: GridBackModel?
     private var screenObserver: NSObjectProtocol?
+    /// True while this overlay is keeping an auto-hidden menu bar from being revealed.
+    private var menuBarSuppressed = false
+    /// Bumps on each show so a delayed hide cannot reveal the bar for a newer open.
+    private var menuBarGeneration = 0
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
@@ -39,27 +43,68 @@ final class OverlayController: NSObject {
         // stays the window in front. Dock preferences are not touched.
         panel.level = OverlayPanel.overlayLevel
         panel.setFrame(screen.frame, display: true)
+        // Read this before activation. Activating an accessory app reveals the
+        // menu bar, and visibleFrame would then report a top inset that the
+        // user did not reserve.
         let reserve = ScreenReserveReader.current(on: screen)
         model.updateScreenReserve(reserve)
+        // presentationOptions cannot hide only the menu bar: autoHideMenuBar
+        // is legal only together with a Dock hide flag, which would change the
+        // Dock. NSMenu.setMenuBarVisible is per-app and leaves Dock prefs alone.
+        menuBarGeneration += 1
+        let generation = menuBarGeneration
+        menuBarSuppressed = !reserve.menuBarReservesSpace
+        if menuBarSuppressed {
+            NSMenu.setMenuBarVisible(false)
+        }
         panel.alphaValue = 1
         NSApp.unhide(nil)
         NSApp.activate()
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         panel.level = OverlayPanel.overlayLevel
+        if menuBarSuppressed {
+            NSMenu.setMenuBarVisible(false)
+        }
         let frame = panel.frame
-        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public)")
+        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.menuBarGeneration == generation else { return }
+            self.keepAutoHiddenMenuBarHidden()
+        }
     }
 
     func hide() {
         panel?.orderOut(nil)
+        let generation = menuBarGeneration
+        // Restore after the app resigns so the bar does not flash while we
+        // are still the active app. System Settings are not written.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.menuBarGeneration == generation else { return }
+            self.releaseMenuBarSuppression()
+        }
+    }
+
+    private func keepAutoHiddenMenuBarHidden() {
+        guard menuBarSuppressed, panel?.isVisible == true else { return }
+        NSMenu.setMenuBarVisible(false)
+    }
+
+    private func releaseMenuBarSuppression() {
+        guard menuBarSuppressed else { return }
+        menuBarSuppressed = false
+        NSMenu.setMenuBarVisible(true)
     }
 
     private func relayoutIfVisible() {
         guard let panel, panel.isVisible, let screen = PrimaryDisplay.screen(), let model else { return }
         panel.level = OverlayPanel.overlayLevel
         panel.setFrame(screen.frame, display: true)
-        model.updateScreenReserve(ScreenReserveReader.current(on: screen))
+        var reserve = ScreenReserveReader.current(on: screen)
+        if menuBarSuppressed {
+            reserve.top = 0
+        }
+        model.updateScreenReserve(reserve)
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {

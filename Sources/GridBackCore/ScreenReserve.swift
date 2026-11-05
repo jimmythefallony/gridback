@@ -14,6 +14,12 @@ public struct ScreenReserve: Equatable, Sendable {
 
     public static let none = ScreenReserve(top: 0, left: 0, bottom: 0, right: 0)
 
+    /// The menu bar is auto-hidden when `visibleFrame` still reaches the top
+    /// of the screen. A positive `top` means it is reserving space.
+    public var menuBarReservesSpace: Bool {
+        top > 0.5
+    }
+
     public init(top: Double, left: Double, bottom: Double, right: Double) {
         self.top = top
         self.left = left
