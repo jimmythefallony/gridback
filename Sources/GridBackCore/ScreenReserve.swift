@@ -50,3 +50,27 @@ public struct ScreenReserve: Equatable, Sendable {
         )
     }
 }
+
+/// AppKit presentation bits. Hiding the menu bar with `NSMenu.setMenuBarVisible(false)`
+/// also sets `hideDock`. These helpers never introduce a Dock-hide bit.
+public enum MenuBarPresentation {
+    public static let autoHideDock: UInt = 1 << 0
+    public static let hideDock: UInt = 1 << 1
+    public static let autoHideMenuBar: UInt = 1 << 2
+    public static let hideMenuBar: UInt = 1 << 3
+
+    /// While the menu bar is auto-hidden, ask for that behavior alone.
+    /// A menu bar that already reserves space is left unchanged.
+    public static func keepingDockVisible(current: UInt, suppressAutoHiddenMenuBar: Bool) -> UInt {
+        guard suppressAutoHiddenMenuBar else { return current }
+        var next = current | autoHideMenuBar
+        next &= ~hideMenuBar
+        if current & hideDock == 0 {
+            next &= ~hideDock
+        }
+        if current & autoHideDock == 0 {
+            next &= ~autoHideDock
+        }
+        return next
+    }
+}
