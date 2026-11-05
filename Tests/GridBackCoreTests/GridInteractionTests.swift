@@ -66,6 +66,10 @@ final class GridReorderSessionTests: XCTestCase {
         XCTAssertEqual(GridDragResolver.pageEdge(x: 10, overlayWidth: 1000), .previous)
         XCTAssertEqual(GridDragResolver.pageEdge(x: 990, overlayWidth: 1000), .next)
         XCTAssertNil(GridDragResolver.pageEdge(x: 500, overlayWidth: 1000))
+        XCTAssertEqual(GridDragResolver.pageEdge(x: 200, overlayWidth: 1000, leading: 180), .previous)
+        XCTAssertNil(GridDragResolver.pageEdge(x: 200, overlayWidth: 1000, leading: 0))
+        XCTAssertEqual(GridDragResolver.pageEdge(x: 820, overlayWidth: 1000, trailing: 160), .next)
+        XCTAssertNil(GridDragResolver.pageEdge(x: 820, overlayWidth: 1000, trailing: 0))
     }
 }
 
@@ -97,6 +101,44 @@ final class PageSwipeTrackerTests: XCTestCase {
     }
 }
 
+final class ScreenReserveTests: XCTestCase {
+    func testBottomDockAndMenuBar() {
+        let reserve = ScreenReserve.occupying(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            visibleX: 0, visibleY: 80, visibleWidth: 1728, visibleHeight: 1117 - 80 - 25
+        )
+        XCTAssertEqual(reserve.bottom, 80, accuracy: 0.001)
+        XCTAssertEqual(reserve.top, 25, accuracy: 0.001)
+        XCTAssertEqual(reserve.left, 0, accuracy: 0.001)
+        XCTAssertEqual(reserve.right, 0, accuracy: 0.001)
+    }
+
+    func testLeftAndRightDock() {
+        let left = ScreenReserve.occupying(
+            screenX: 0, screenY: 0, screenWidth: 1440, screenHeight: 900,
+            visibleX: 150, visibleY: 0, visibleWidth: 1440 - 150, visibleHeight: 870
+        )
+        XCTAssertEqual(left.left, 150, accuracy: 0.001)
+        XCTAssertEqual(left.top, 30, accuracy: 0.001)
+        XCTAssertEqual(left.bottom, 0, accuracy: 0.001)
+
+        let right = ScreenReserve.occupying(
+            screenX: 100, screenY: 0, screenWidth: 1440, screenHeight: 900,
+            visibleX: 100, visibleY: 0, visibleWidth: 1440 - 160, visibleHeight: 875
+        )
+        XCTAssertEqual(right.right, 160, accuracy: 0.001)
+        XCTAssertEqual(right.left, 0, accuracy: 0.001)
+    }
+
+    func testAutoHideDoesNotReserveADockEdge() {
+        let reserve = ScreenReserve.occupying(
+            screenX: 0, screenY: 0, screenWidth: 1512, screenHeight: 982,
+            visibleX: 0, visibleY: 0, visibleWidth: 1512, visibleHeight: 982 - 32
+        )
+        XCTAssertEqual(reserve, ScreenReserve(top: 32, left: 0, bottom: 0, right: 0))
+    }
+}
+
 final class LaunchGridLayoutTests: XCTestCase {
     func testSideMarginsAreAboutNinePercentAndEachPageIsFullWidth() {
         for width in [1728.0, 2560.0, 3440.0] {
@@ -111,6 +153,62 @@ final class LaunchGridLayoutTests: XCTestCase {
         let laptop = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
         XCTAssertEqual(laptop.topChrome, laptop.bottomChrome)
         XCTAssertLessThan(laptop.iconLabelGap, 6)
+        XCTAssertEqual(laptop.searchCenterY, 58, accuracy: 0.001)
+        XCTAssertEqual(laptop.pageControlCenterY, 1117 - 58, accuracy: 0.001)
+        XCTAssertEqual(laptop.contentCenterX, 1728 / 2, accuracy: 0.001)
+    }
+
+    func testVisibleDockInsetsKeepIconsOutOfTheReservedEdge() {
+        let bottom = ScreenReserve(top: 24, left: 0, bottom: 96, right: 0)
+        let layout = LaunchGridLayout.make(
+            overlayWidth: 1728,
+            overlayHeight: 1117,
+            columns: 7,
+            rows: 5,
+            reserve: bottom
+        )
+        XCTAssertGreaterThanOrEqual(layout.bottomChrome, 96 + 80)
+        XCTAssertLessThanOrEqual(layout.originY + layout.gridHeight, 1117 - 96)
+        XCTAssertGreaterThanOrEqual(layout.pageControlCenterY, 0)
+        XCTAssertLessThan(layout.pageControlCenterY, 1117 - 96)
+        XCTAssertGreaterThan(layout.searchCenterY, 24)
+
+        let left = ScreenReserve(top: 0, left: 200, bottom: 0, right: 0)
+        let shifted = LaunchGridLayout.make(
+            overlayWidth: 1728,
+            overlayHeight: 1117,
+            columns: 7,
+            rows: 5,
+            reserve: left
+        )
+        XCTAssertGreaterThanOrEqual(shifted.originX, 200)
+        XCTAssertLessThanOrEqual(shifted.originX + shifted.gridWidth, 1728)
+
+        let right = ScreenReserve(top: 0, left: 0, bottom: 0, right: 180)
+        let rightDock = LaunchGridLayout.make(
+            overlayWidth: 1728,
+            overlayHeight: 1117,
+            columns: 7,
+            rows: 5,
+            reserve: right
+        )
+        XCTAssertLessThanOrEqual(rightDock.originX + rightDock.gridWidth, 1728 - 180)
+        XCTAssertEqual(rightDock.bottomChrome, 108, accuracy: 0.001)
+    }
+
+    func testAutoHideLeavesTheFullGridArea() {
+        let hidden = ScreenReserve(top: 24, left: 0, bottom: 0, right: 0)
+        let layout = LaunchGridLayout.make(
+            overlayWidth: 1728,
+            overlayHeight: 1117,
+            columns: 7,
+            rows: 5,
+            reserve: hidden
+        )
+        let plain = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
+        XCTAssertEqual(layout.bottomChrome, plain.bottomChrome, accuracy: 0.001)
+        XCTAssertEqual(layout.originX, plain.originX, accuracy: 0.001)
+        XCTAssertEqual(layout.pageControlCenterY, plain.pageControlCenterY, accuracy: 0.001)
     }
 
     func testHitTestingIgnoresGapsAndMargins() {

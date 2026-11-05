@@ -18,7 +18,8 @@ struct OverlayRootView: View {
                 overlayWidth: overlay.size.width,
                 overlayHeight: overlay.size.height,
                 columns: metrics.columns,
-                rows: metrics.rows
+                rows: metrics.rows,
+                reserve: model.screenReserve
             )
             let pages = reorder?.preview.pages ?? model.layout.pages
             ZStack {
@@ -44,6 +45,8 @@ struct OverlayRootView: View {
                     SearchResultsView(model: model, layout: chrome)
                         .padding(.top, chrome.topChrome)
                         .padding(.bottom, chrome.bottomChrome)
+                        .padding(.leading, chrome.originX)
+                        .padding(.trailing, max(0, chrome.pageWidth - chrome.originX - chrome.gridWidth))
                 } else {
                     pageStrip(pages: pages, layout: chrome)
                         .frame(width: chrome.pageWidth, height: chrome.gridHeight)
@@ -54,13 +57,13 @@ struct OverlayRootView: View {
                 }
 
                 SearchPill(query: searchQueryBinding)
-                    .position(x: overlay.size.width / 2, y: 58)
+                    .position(x: chrome.contentCenterX, y: chrome.searchCenterY)
 
                 if !model.isSearching && !pages.isEmpty {
                     PageControls(pageCount: pages.count, position: visualPage) { page in
                         turnToPage(page)
                     }
-                    .position(x: overlay.size.width / 2, y: overlay.size.height - 58)
+                    .position(x: chrome.contentCenterX, y: chrome.pageControlCenterY)
                 }
 
                 if let reorder {
@@ -77,13 +80,13 @@ struct OverlayRootView: View {
                 if let warning = model.persistenceWarning {
                     banner(warning, color: Color.orange.opacity(0.92))
                         .frame(maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 18)
+                        .padding(.top, max(18, model.screenReserve.top + 8))
                 }
 
                 if let launchError = model.launchError {
                     banner(launchError, color: Color.red.opacity(0.92))
                         .frame(maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 72)
+                        .padding(.bottom, max(72, model.screenReserve.bottom + 24))
                 }
             }
             .coordinateSpace(name: "overlay")
@@ -162,7 +165,12 @@ struct OverlayRootView: View {
 
     private func updateReorder(at point: CGPoint, layout: LaunchGridLayout) {
         guard var session = reorder else { return }
-        let edge = GridDragResolver.pageEdge(x: Double(point.x), overlayWidth: layout.pageWidth)
+        let edge = GridDragResolver.pageEdge(
+            x: Double(point.x),
+            overlayWidth: layout.pageWidth,
+            leading: model.screenReserve.left,
+            trailing: model.screenReserve.right
+        )
         let slot = edge == nil ? layout.hitSlot(x: Double(point.x), y: Double(point.y)) : nil
         session.hover(slot: slot, edge: edge)
         reorder = session

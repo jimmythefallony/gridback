@@ -27,6 +27,9 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var shortcutStatus: String?
     @Published private(set) var isScanning = true
     @Published private(set) var iconImages: [String: NSImage] = [:]
+    /// Menu bar and Dock space taken from the screen's visible frame. Zero on
+    /// an edge means that edge is not reserved, including an auto-hidden Dock.
+    @Published private(set) var screenReserve = ScreenReserve.none
 
     weak var delegate: GridBackUIDelegate?
 
@@ -73,6 +76,11 @@ final class GridBackModel: ObservableObject {
             persistenceWarning = message
             persistEnabled = allowSave
         }
+    }
+
+    func updateScreenReserve(_ reserve: ScreenReserve) {
+        guard reserve != screenReserve else { return }
+        screenReserve = reserve
     }
 
     func start() {

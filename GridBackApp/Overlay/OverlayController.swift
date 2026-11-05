@@ -1,4 +1,5 @@
 import AppKit
+import GridBackCore
 import os
 import SwiftUI
 
@@ -34,14 +35,20 @@ final class OverlayController: NSObject {
         }
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
+        // Re-apply after any AppKit floating-panel adjustment so the real Dock
+        // stays the window in front. Dock preferences are not touched.
+        panel.level = OverlayPanel.overlayLevel
         panel.setFrame(screen.frame, display: true)
+        let reserve = ScreenReserveReader.current(on: screen)
+        model.updateScreenReserve(reserve)
         panel.alphaValue = 1
         NSApp.unhide(nil)
         NSApp.activate()
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        panel.level = OverlayPanel.overlayLevel
         let frame = panel.frame
-        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public)")
+        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public)")
     }
 
     func hide() {
@@ -49,8 +56,10 @@ final class OverlayController: NSObject {
     }
 
     private func relayoutIfVisible() {
-        guard let panel, panel.isVisible, let screen = PrimaryDisplay.screen() else { return }
+        guard let panel, panel.isVisible, let screen = PrimaryDisplay.screen(), let model else { return }
+        panel.level = OverlayPanel.overlayLevel
         panel.setFrame(screen.frame, display: true)
+        model.updateScreenReserve(ScreenReserveReader.current(on: screen))
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
@@ -74,5 +83,23 @@ final class OverlayController: NSObject {
         ])
         panel.contentView = effect
         return panel
+    }
+}
+
+enum ScreenReserveReader {
+    /// Reads the screen geometry AppKit already publishes. Does not write Dock settings.
+    static func current(on screen: NSScreen) -> ScreenReserve {
+        let screenFrame = screen.frame
+        let visible = screen.visibleFrame
+        return ScreenReserve.occupying(
+            screenX: Double(screenFrame.origin.x),
+            screenY: Double(screenFrame.origin.y),
+            screenWidth: Double(screenFrame.size.width),
+            screenHeight: Double(screenFrame.size.height),
+            visibleX: Double(visible.origin.x),
+            visibleY: Double(visible.origin.y),
+            visibleWidth: Double(visible.size.width),
+            visibleHeight: Double(visible.size.height)
+        )
     }
 }
