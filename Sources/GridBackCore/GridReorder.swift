@@ -32,10 +32,20 @@ public enum GridDragResolver {
     }
 
     /// `x` is the pointer's distance from the left of the full overlay.
-    public static func pageEdge(x: Double, overlayWidth: Double, margin: Double = edgeMargin) -> PageTurn? {
-        guard overlayWidth > margin * 2, margin > 0 else { return nil }
-        if x <= margin { return .previous }
-        if x >= overlayWidth - margin { return .next }
+    /// `leading` and `trailing` are edges already covered by the Dock, so the
+    /// page-turn zone starts just inside the usable area.
+    public static func pageEdge(
+        x: Double,
+        overlayWidth: Double,
+        margin: Double = edgeMargin,
+        leading: Double = 0,
+        trailing: Double = 0
+    ) -> PageTurn? {
+        let leading = max(0, leading)
+        let trailing = max(0, trailing)
+        guard overlayWidth > leading + trailing + margin * 2, margin > 0 else { return nil }
+        if x <= leading + margin { return .previous }
+        if x >= overlayWidth - trailing - margin { return .next }
         return nil
     }
 }

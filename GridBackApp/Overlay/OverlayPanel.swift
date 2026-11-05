@@ -4,10 +4,13 @@ import AppKit
 /// full-screen app's Space, and does not become a full-screen Space of its own
 /// (`fullScreenPrimary` is intentionally absent).
 final class OverlayPanel: NSPanel {
-    /// Just under the lock-screen shield, so the grid covers normal windows and
-    /// full-screen apps without covering the lock screen.
+    /// One level under the Dock, and still above normal and floating windows.
+    ///
+    /// The Dock process keeps drawing its own icons, size, order, magnification,
+    /// and translucent background. This panel does not change Dock preferences
+    /// or presentation options. The lock-screen shield stays above the grid.
     static var overlayLevel: NSWindow.Level {
-        NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) - 1)
+        NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
     }
 
     init(screen: NSScreen) {
