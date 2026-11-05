@@ -130,6 +130,64 @@ final class ScreenReserveTests: XCTestCase {
         XCTAssertEqual(right.left, 0, accuracy: 0.001)
     }
 
+    func testSystemLauncherIsNotTheIdleDockHost() {
+        let idleDock = SystemLauncherWindow(
+            owner: "Dock",
+            name: "",
+            memoryBytes: 2432,
+            width: 1728,
+            height: 1117
+        )
+        XCTAssertFalse(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: "com.brave.Browser.beta",
+            launcherProcessRunning: false,
+            windows: [idleDock],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+        XCTAssertFalse(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: SystemLauncherVisibility.dockBundleID,
+            launcherProcessRunning: false,
+            windows: [idleDock],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+    }
+
+    func testSystemLauncherIsVisibleWhenItHasANameOrBackingStore() {
+        let named = SystemLauncherWindow(owner: "Dock", name: "Launchpad", memoryBytes: 2432, width: 800, height: 600)
+        XCTAssertTrue(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: "com.apple.finder",
+            launcherProcessRunning: false,
+            windows: [named],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+        let drawn = SystemLauncherWindow(owner: "Dock", name: "", memoryBytes: 2_000_000, width: 1728, height: 1117)
+        XCTAssertTrue(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: "com.apple.finder",
+            launcherProcessRunning: false,
+            windows: [drawn],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+        XCTAssertTrue(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: "com.apple.finder",
+            launcherProcessRunning: true,
+            windows: [],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+        let apps = SystemLauncherWindow(owner: "Apps", name: "", memoryBytes: 100, width: 200, height: 200)
+        XCTAssertTrue(SystemLauncherVisibility.isVisible(
+            frontmostBundleID: nil,
+            launcherProcessRunning: false,
+            windows: [apps],
+            screenWidth: 1728,
+            screenHeight: 1117
+        ))
+    }
+
     func testMenuBarReservesSpaceOnlyWhenTheTopInsetIsReal() {
         XCTAssertFalse(ScreenReserve.none.menuBarReservesSpace)
         XCTAssertFalse(ScreenReserve(top: 0, left: 0, bottom: 90, right: 0).menuBarReservesSpace)
