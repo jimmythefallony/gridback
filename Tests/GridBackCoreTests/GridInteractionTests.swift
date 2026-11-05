@@ -203,6 +203,34 @@ final class ScreenReserveTests: XCTestCase {
     }
 }
 
+final class MenuBarPresentationTests: XCTestCase {
+    func testAutoHiddenMenuBarDoesNotAddADockHideFlag() {
+        let hidden = MenuBarPresentation.keepingDockVisible(current: 0, suppressAutoHiddenMenuBar: true)
+        XCTAssertEqual(hidden, MenuBarPresentation.autoHideMenuBar)
+        XCTAssertEqual(hidden & MenuBarPresentation.hideDock, 0)
+        XCTAssertEqual(hidden & MenuBarPresentation.autoHideDock, 0)
+        XCTAssertEqual(hidden & MenuBarPresentation.hideMenuBar, 0)
+    }
+
+    func testVisibleMenuBarLeavesPresentationUntouched() {
+        XCTAssertEqual(MenuBarPresentation.keepingDockVisible(current: 0, suppressAutoHiddenMenuBar: false), 0)
+        let dockAlreadyAutoHides = MenuBarPresentation.autoHideDock
+        XCTAssertEqual(
+            MenuBarPresentation.keepingDockVisible(current: dockAlreadyAutoHides, suppressAutoHiddenMenuBar: false),
+            dockAlreadyAutoHides
+        )
+    }
+
+    func testExistingDockFlagIsNotIntroducedByMenuBarSuppression() {
+        let combined = MenuBarPresentation.keepingDockVisible(current: 0, suppressAutoHiddenMenuBar: true)
+        XCTAssertFalse(combined & MenuBarPresentation.hideDock != 0)
+        let alreadyHidden = MenuBarPresentation.hideDock
+        let kept = MenuBarPresentation.keepingDockVisible(current: alreadyHidden, suppressAutoHiddenMenuBar: true)
+        XCTAssertEqual(kept & MenuBarPresentation.hideDock, MenuBarPresentation.hideDock)
+        XCTAssertEqual(kept & MenuBarPresentation.autoHideMenuBar, MenuBarPresentation.autoHideMenuBar)
+    }
+}
+
 final class LaunchGridLayoutTests: XCTestCase {
     func testSideMarginsAreAboutNinePercentAndEachPageIsFullWidth() {
         for width in [1728.0, 2560.0, 3440.0] {

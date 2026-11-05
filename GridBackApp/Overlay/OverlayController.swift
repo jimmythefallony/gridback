@@ -11,6 +11,8 @@ final class OverlayController: NSObject {
     private var screenObserver: NSObjectProtocol?
     /// True while this overlay is keeping an auto-hidden menu bar from being revealed.
     private var menuBarSuppressed = false
+    /// Presentation options from before this overlay touched them. Restored on close.
+    private var savedPresentationOptions: NSApplication.PresentationOptions?
     /// Bumps on each show so a delayed hide cannot reveal the bar for a newer open.
     private var menuBarGeneration = 0
     /// One dismiss per open. Toggling twice would show the system launcher again.
@@ -50,14 +52,13 @@ final class OverlayController: NSObject {
         // user did not reserve.
         let reserve = ScreenReserveReader.current(on: screen)
         model.updateScreenReserve(reserve)
-        // presentationOptions cannot hide only the menu bar: autoHideMenuBar
-        // is legal only together with a Dock hide flag, which would change the
-        // Dock. NSMenu.setMenuBarVisible is per-app and leaves Dock prefs alone.
+        // setMenuBarVisible(false) sets hideDock as well as hideMenuBar, which
+        // removes the Dock. autoHideMenuBar alone does not.
         menuBarGeneration += 1
         let generation = menuBarGeneration
         menuBarSuppressed = !reserve.menuBarReservesSpace
         if menuBarSuppressed {
-            NSMenu.setMenuBarVisible(false)
+            applyMenuBarPolicy()
         }
         // The system launcher can open with us, or already be underneath.
         // Close it before we take the keyboard, and only once: the Dock
@@ -74,7 +75,7 @@ final class OverlayController: NSObject {
         panel.makeKey()
         panel.level = OverlayPanel.overlayLevel
         if menuBarSuppressed {
-            NSMenu.setMenuBarVisible(false)
+            applyMenuBarPolicy()
         }
         let frame = panel.frame
         log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public)")
@@ -118,15 +119,40 @@ final class OverlayController: NSObject {
         log.info("Dismissed the system launcher that was open with the grid")
     }
 
+    private func applyMenuBarPolicy() {
+        guard menuBarSuppressed else { return }
+        if savedPresentationOptions == nil {
+            savedPresentationOptions = NSApp.presentationOptions
+        }
+        let updated = NSApplication.PresentationOptions(rawValue: MenuBarPresentation.keepingDockVisible(
+            current: NSApp.presentationOptions.rawValue,
+            suppressAutoHiddenMenuBar: true
+        ))
+        var safe = updated
+        let baseline = savedPresentationOptions ?? NSApp.presentationOptions
+        if !baseline.contains(.hideDock) {
+            safe.remove(.hideDock)
+        }
+        if !baseline.contains(.autoHideDock) {
+            safe.remove(.autoHideDock)
+        }
+        if NSApp.presentationOptions != safe {
+            NSApp.presentationOptions = safe
+        }
+    }
+
     private func keepAutoHiddenMenuBarHidden() {
         guard menuBarSuppressed, panel?.isVisible == true else { return }
-        NSMenu.setMenuBarVisible(false)
+        applyMenuBarPolicy()
     }
 
     private func releaseMenuBarSuppression() {
-        guard menuBarSuppressed else { return }
+        guard menuBarSuppressed || savedPresentationOptions != nil else { return }
         menuBarSuppressed = false
-        NSMenu.setMenuBarVisible(true)
+        if let saved = savedPresentationOptions {
+            NSApp.presentationOptions = saved
+            savedPresentationOptions = nil
+        }
     }
 
     private func relayoutIfVisible() {
