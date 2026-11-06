@@ -8,15 +8,11 @@ import SwiftUI
 /// Use this on the main thread.
 final class OverlayController: NSObject {
     private var panel: OverlayPanel?
-    private var menuBarCover: MenuBarCoverPanel?
+    private var dockBackdrop: DockBackdropPanel?
     private var model: GridBackModel?
     private var screenObserver: NSObjectProtocol?
-    /// True while this overlay is keeping an auto-hidden menu bar from being revealed.
-    private var menuBarSuppressed = false
-    /// Presentation options from before this overlay touched them. Restored on close.
-    private var savedPresentationOptions: NSApplication.PresentationOptions?
-    /// Bumps on each show so a delayed hide cannot reveal the bar for a newer open.
-    private var menuBarGeneration = 0
+    /// Bumps on each show so a delayed pass cannot reopen a grid that already closed.
+    private var showGeneration = 0
     /// One dismiss per open. Toggling twice would show the system launcher again.
     private var didDismissSystemLauncher = false
     private var escapeMonitor: Any?
@@ -56,61 +52,49 @@ final class OverlayController: NSObject {
         }
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
-        // Re-apply after any AppKit floating-panel adjustment so the real Dock
-        // stays the window in front. Dock preferences are not touched.
-        panel.level = OverlayPanel.overlayLevel
-        panel.setFrame(screen.frame, display: true)
-        // Read this before activation. Activating an accessory app reveals the
-        // menu bar, and visibleFrame would then report a top inset that the
-        // user did not reserve.
-        var reserve = ScreenReserveReader.current(on: screen)
-        // A revealed auto-hide bar still has a top inset. The preference, not
-        // that momentary inset, decides whether we keep it hidden.
-        menuBarSuppressed = MenuBarSuppression.shouldSuppress(
-            menuBarReservesSpace: reserve.menuBarReservesSpace,
-            userAutoHidesMenuBar: MenuBarPreference.userAutoHidesMenuBar
-        )
-        if menuBarSuppressed {
-            reserve.top = 0
-        }
-        model.updateScreenReserve(reserve)
-        // setMenuBarVisible(false) sets hideDock as well as hideMenuBar.
-        // autoHideMenuBar alone does not hide the Dock, and on this OS it takes
-        // effect while GridBack stays an accessory app. Switching to .regular
-        // would flash a Dock icon.
-        menuBarGeneration += 1
-        let generation = menuBarGeneration
+        let backdrop = self.dockBackdrop ?? DockBackdropPanel(screen: screen)
+        self.dockBackdrop = backdrop
+        // The window already stops at the Dock and covers the menu bar, so the
+        // icon layout uses the window itself and is not inset a second time.
+        // Read the Dock band before activation. Activating can reveal the menu
+        // bar and change the top inset; the Dock edge does not depend on that.
+        let occlusion = DockClearanceReader.current(on: screen)
+        place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
+        model.updateScreenReserve(.none)
+        showGeneration += 1
+        let generation = showGeneration
         // The system launcher can open with us, or already be underneath.
         // Close it before we take the keyboard, and only once: the Dock
         // notification toggles, so a second send would open it again.
         didDismissSystemLauncher = false
         dismissSystemLauncherIfNeeded()
         panel.alphaValue = 1
-        updateMenuBarCover(on: screen)
+        backdrop.alphaValue = 1
         NSApp.unhide(nil)
+        backdrop.orderFrontRegardless()
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         panel.makeKey()
-        panel.level = OverlayPanel.overlayLevel
+        // AppKit can drop a panel's level while ordering it.
+        panel.level = OverlayPanel.gridLevel
+        backdrop.level = DockBackdropPanel.backdropLevel
         claimKeyboard()
-        updateMenuBarCover(on: screen)
         let frame = panel.frame
         installEscapeMonitor()
-        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public) options=\(NSApp.presentationOptions.rawValue, privacy: .public)")
+        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) backdrop=\(NSStringFromRect(backdrop.frame), privacy: .public) backdropLevel=\(backdrop.level.rawValue, privacy: .public) dockEdge=\(String(describing: occlusion.edge), privacy: .public) dockThickness=\(occlusion.thickness, privacy: .public)")
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.menuBarGeneration == generation, self.panel?.isVisible == true else { return }
+            guard let self, self.showGeneration == generation, self.panel?.isVisible == true else { return }
             self.claimKeyboard()
-            self.keepAutoHiddenMenuBarHidden()
             if let screen = PrimaryDisplay.screen() {
-                self.updateMenuBarCover(on: screen)
+                self.relayout(on: screen)
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, self.menuBarGeneration == generation, self.panel?.isVisible == true else { return }
+            guard let self, self.showGeneration == generation, self.panel?.isVisible == true else { return }
             self.dismissSystemLauncherIfNeeded()
             self.claimKeyboard()
             if let screen = PrimaryDisplay.screen() {
-                self.updateMenuBarCover(on: screen)
+                self.relayout(on: screen)
             }
         }
     }
@@ -120,26 +104,19 @@ final class OverlayController: NSObject {
         // If the system launcher is still underneath, close it with us so a
         // background click does not dismiss into Launchpad.
         dismissSystemLauncherIfNeeded()
-        menuBarCover?.orderOut(nil)
+        showGeneration += 1
+        dockBackdrop?.orderOut(nil)
         panel?.orderOut(nil)
-        let generation = menuBarGeneration
-        // Restore after the app resigns so the bar does not flash while we
-        // are still the active app. System Settings are not written.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.menuBarGeneration == generation else { return }
-            self.releaseMenuBarSuppression()
-        }
     }
 
     private func claimKeyboard() {
         guard panel?.isVisible == true else { return }
         // Stay accessory for the whole lifetime so GridBack never appears in
-        // the Dock or in Command-Tab. autoHideMenuBar is applied around
-        // activation and never adds a Dock-hide flag.
-        applyMenuBarPolicy()
+        // the Dock or in Command-Tab. Presentation options are not changed.
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKey()
-        applyMenuBarPolicy()
+        panel?.level = OverlayPanel.gridLevel
+        dockBackdrop?.level = DockBackdropPanel.backdropLevel
     }
 
     private func otherApplicationDidActivate(_ notification: Notification) {
@@ -192,97 +169,69 @@ final class OverlayController: NSObject {
         log.info("Dismissed the system launcher that was open with the grid")
     }
 
-    private func applyMenuBarPolicy() {
-        guard menuBarSuppressed else { return }
-        if savedPresentationOptions == nil {
-            savedPresentationOptions = NSApp.presentationOptions
-        }
-        let updated = NSApplication.PresentationOptions(rawValue: MenuBarPresentation.keepingDockVisible(
-            current: NSApp.presentationOptions.rawValue,
-            suppressAutoHiddenMenuBar: true
-        ))
-        var safe = updated
-        let baseline = savedPresentationOptions ?? NSApp.presentationOptions
-        if !baseline.contains(.hideDock) {
-            safe.remove(.hideDock)
-        }
-        if !baseline.contains(.autoHideDock) {
-            safe.remove(.autoHideDock)
-        }
-        if NSApp.presentationOptions != safe {
-            NSApp.presentationOptions = safe
-        }
-    }
-
-    private func keepAutoHiddenMenuBarHidden() {
-        guard menuBarSuppressed, panel?.isVisible == true else { return }
-        applyMenuBarPolicy()
-    }
-
-    private func releaseMenuBarSuppression() {
-        guard menuBarSuppressed || savedPresentationOptions != nil else { return }
-        menuBarSuppressed = false
-        if let saved = savedPresentationOptions {
-            NSApp.presentationOptions = saved
-            savedPresentationOptions = nil
-        }
-    }
-
     private func relayoutIfVisible() {
-        guard let panel, panel.isVisible, let screen = PrimaryDisplay.screen(), let model else { return }
-        panel.level = OverlayPanel.overlayLevel
-        panel.setFrame(screen.frame, display: true)
-        updateMenuBarCover(on: screen)
-        var reserve = ScreenReserveReader.current(on: screen)
-        if menuBarSuppressed {
-            reserve.top = 0
-        }
-        model.updateScreenReserve(reserve)
+        guard panel?.isVisible == true, let screen = PrimaryDisplay.screen() else { return }
+        relayout(on: screen)
     }
 
-    private func updateMenuBarCover(on screen: NSScreen) {
-        guard let panel else { return }
-        guard let backdrop = MenuBarCoverImage.backdrop(on: screen) else {
-            panel.backdropView.image = nil
-            panel.backdropView.isHidden = true
-            panel.fallbackBlur.isHidden = false
-            menuBarCover?.orderOut(nil)
-            return
-        }
-        panel.fallbackBlur.isHidden = true
-        panel.backdropView.isHidden = false
-        panel.backdropView.image = backdrop.full
-        guard menuBarSuppressed, panel.isVisible else {
-            menuBarCover?.orderOut(nil)
-            return
-        }
-        let cover = menuBarCover ?? MenuBarCoverPanel(screen: screen)
-        menuBarCover = cover
-        cover.show(snapshot: backdrop.strip, on: screen, height: backdrop.stripPointHeight)
+    private func relayout(on screen: NSScreen) {
+        guard let panel, let model else { return }
+        let backdrop = dockBackdrop ?? DockBackdropPanel(screen: screen)
+        dockBackdrop = backdrop
+        let occlusion = DockClearanceReader.current(on: screen)
+        place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
+        model.updateScreenReserve(.none)
+        panel.level = OverlayPanel.gridLevel
+        backdrop.level = DockBackdropPanel.backdropLevel
+    }
+
+    private func place(panel: OverlayPanel, backdrop: DockBackdropPanel, on screen: NSScreen, occlusion: DockOcclusion) {
+        let screenFrame = screen.frame
+        let frames = GridOverlayFrames.make(
+            screenX: Double(screenFrame.origin.x),
+            screenY: Double(screenFrame.origin.y),
+            screenWidth: Double(screenFrame.size.width),
+            screenHeight: Double(screenFrame.size.height),
+            occlusion: occlusion
+        )
+        let gridRect = NSRect(x: frames.grid.x, y: frames.grid.y, width: frames.grid.width, height: frames.grid.height)
+        let backdropRect = NSRect(x: frames.backdrop.x, y: frames.backdrop.y, width: frames.backdrop.width, height: frames.backdrop.height)
+        panel.setFrame(gridRect, display: false)
+        backdrop.setFrame(backdropRect, display: false)
+        let picture = DesktopPicture.image(on: screen)
+        let gridPlacement = BackdropImagePlacement.inWindow(screen: frames.backdrop, window: frames.grid)
+        let fullPlacement = BackdropImagePlacement.inWindow(screen: frames.backdrop, window: frames.backdrop)
+        BackdropSurface.show(
+            image: picture,
+            placement: NSRect(x: gridPlacement.x, y: gridPlacement.y, width: gridPlacement.width, height: gridPlacement.height),
+            imageView: panel.backdropView,
+            fallback: panel.fallbackBlur,
+            window: panel
+        )
+        BackdropSurface.show(
+            image: picture,
+            placement: NSRect(x: fullPlacement.x, y: fullPlacement.y, width: fullPlacement.width, height: fullPlacement.height),
+            imageView: backdrop.backdropView,
+            fallback: backdrop.fallbackBlur,
+            window: backdrop
+        )
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
         let panel = OverlayPanel(screen: screen)
-        let bounds = NSRect(origin: .zero, size: screen.frame.size)
-        let container = NSView(frame: bounds)
-        container.autoresizingMask = [.width, .height]
-        panel.fallbackBlur.frame = bounds
-        panel.backdropView.frame = bounds
-        container.addSubview(panel.fallbackBlur)
-        container.addSubview(panel.backdropView)
         let hosting = NSHostingView(rootView: OverlayRootView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.wantsLayer = true
         hosting.layer?.isOpaque = false
         hosting.layer?.backgroundColor = NSColor.clear.cgColor
-        panel.backdropView.addSubview(hosting)
+        guard let container = panel.contentView else { return panel }
+        container.addSubview(hosting)
         NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: panel.backdropView.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: panel.backdropView.trailingAnchor),
-            hosting.topAnchor.constraint(equalTo: panel.backdropView.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: panel.backdropView.bottomAnchor)
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: container.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
-        panel.contentView = container
         return panel
     }
 }
@@ -332,41 +281,31 @@ enum SystemLauncherProbe {
     }
 }
 
-struct DesktopBackdrop {
-    var full: NSImage
-    var strip: NSImage
-    var stripPointHeight: CGFloat
-}
-
-enum MenuBarCoverImage {
+enum DesktopPicture {
     private static var cacheKey: String?
-    private static var cache: DesktopBackdrop?
+    private static var cache: NSImage?
 
-    /// One blurred desktop picture. The grid shows all of it. The strip shows
-    /// its top rows, at the same scale, so the two meet on a shared pixel row.
-    static func backdrop(on screen: NSScreen) -> DesktopBackdrop? {
+    /// One blurred desktop picture at the screen's pixel size. Both windows
+    /// display this image; neither applies a material on top of it.
+    static func image(on screen: NSScreen) -> NSImage? {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
-        let barPoints = MenuBarCoverPanel.barPoints(on: screen)
-        let geometry = BackdropGeometry.make(
-            screenWidth: Double(screen.frame.width),
-            screenHeight: Double(screen.frame.height),
-            scale: Double(screen.backingScaleFactor),
-            barPoints: Double(barPoints)
-        )
-        let key = "\(url.path)|\(geometry.pixelWidth)x\(geometry.pixelHeight)|\(geometry.stripPixelHeight)"
+        let scale = max(screen.backingScaleFactor, 1)
+        let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
+        let pixelH = max(1, Int((screen.frame.height * scale).rounded()))
+        let key = "\(url.path)|\(pixelW)x\(pixelH)"
         if key == cacheKey, let cache { return cache }
-        guard let rendered = render(url: url, screen: screen.frame.size, geometry: geometry) else { return nil }
+        guard let rendered = render(url: url, pointSize: screen.frame.size, pixelWidth: pixelW, pixelHeight: pixelH) else { return nil }
         cacheKey = key
         cache = rendered
         return rendered
     }
 
-    private static func render(url: URL, screen: NSSize, geometry: BackdropGeometry) -> DesktopBackdrop? {
+    private static func render(url: URL, pointSize: NSSize, pixelWidth: Int, pixelHeight: Int) -> NSImage? {
         guard let source = NSImage(contentsOf: url) else { return nil }
         var proposed = NSRect(origin: .zero, size: source.size)
         guard let wallpaper = source.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else { return nil }
-        let pixelW = CGFloat(geometry.pixelWidth)
-        let pixelH = CGFloat(geometry.pixelHeight)
+        let pixelW = CGFloat(pixelWidth)
+        let pixelH = CGFloat(pixelHeight)
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
         let fit = max(pixelW / srcW, pixelH / srcH)
@@ -377,41 +316,49 @@ enum MenuBarCoverImage {
                 y: (pixelH - srcH * fit) / 2
             ))
         let extent = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
-        // Radius is in the picture's pixels. 52 points keeps the wallpaper's
-        // vertical color (the sky band) instead of flattening it to one grey.
-        let scale = pixelH / max(screen.height, 1)
+        let scale = pixelH / max(pointSize.height, 1)
         let radius = 52 * Double(scale)
         let blurred = placed.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
             .cropped(to: extent)
         guard let fullImage = CIContext().createCGImage(blurred, from: extent) else { return nil }
-        let stripPixels = geometry.stripPixelHeight
-        guard let stripImage = fullImage.cropping(to: CGRect(
-            x: 0,
-            y: fullImage.height - stripPixels,
-            width: fullImage.width,
-            height: stripPixels
-        )) else { return nil }
-        let stripPoints = CGFloat(geometry.stripPointHeight)
-        return DesktopBackdrop(
-            full: NSImage(cgImage: fullImage, size: screen),
-            strip: NSImage(cgImage: stripImage, size: NSSize(width: screen.width, height: stripPoints)),
-            stripPointHeight: stripPoints
-        )
+        return NSImage(cgImage: fullImage, size: pointSize)
     }
 }
 
-enum MenuBarPreference {
-    /// Desktop & Dock "Automatically hide and show the menu bar" on this OS.
-    /// Read only. A revealed bar still occupies `visibleFrame`, so the inset alone
-    /// cannot tell a temporary reveal from a menu bar that is always visible.
-    static var userAutoHidesMenuBar: Bool {
-        guard let value = UserDefaults.standard.persistentDomain(forName: "com.apple.WindowManager")?["AutoHide"] else {
-            return false
+enum DockClearanceReader {
+    /// Reads Dock geometry. Does not write Dock settings or presentation options.
+    static func current(on screen: NSScreen) -> DockOcclusion {
+        let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.dock") ?? [:]
+        let tile = number(domain["tilesize"]) ?? 64
+        let large = number(domain["largesize"]) ?? 128
+        let magnifies = flag(domain["magnification"])
+        let autoHides = flag(domain["autohide"])
+        let edge: DockEdge
+        switch domain["orientation"] as? String {
+        case "left": edge = .left
+        case "right": edge = .right
+        default: edge = .bottom
         }
-        if let number = value as? NSNumber {
-            return number.boolValue
-        }
+        return DockOcclusion.resolve(
+            reserve: ScreenReserveReader.current(on: screen),
+            autoHides: autoHides,
+            autoHideEdge: edge,
+            estimatedAutoHideThickness: DockOcclusion.autoHideThickness(tileSize: tile),
+            magnificationOverflow: DockOcclusion.magnificationOverflow(enabled: magnifies, tileSize: tile, largeSize: large),
+            scale: Double(screen.backingScaleFactor)
+        )
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        return nil
+    }
+
+    private static func flag(_ value: Any?) -> Bool {
+        if let number = value as? NSNumber { return number.boolValue }
         return false
     }
 }
