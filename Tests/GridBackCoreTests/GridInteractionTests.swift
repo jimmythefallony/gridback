@@ -231,6 +231,23 @@ final class MenuBarPresentationTests: XCTestCase {
     }
 }
 
+final class MenuBarCoverFrameTests: XCTestCase {
+    func testCoverSitsOnTheTopEdgeAndDoesNotReachTheDock() {
+        let rect = MenuBarCoverFrame.rect(
+            screenMinX: 0,
+            screenMinY: 0,
+            screenWidth: 1728,
+            screenHeight: 1117,
+            barHeight: 32
+        )
+        XCTAssertEqual(rect.x, 0, accuracy: 0.001)
+        XCTAssertEqual(rect.y, 1085, accuracy: 0.001)
+        XCTAssertEqual(rect.width, 1728, accuracy: 0.001)
+        XCTAssertEqual(rect.height, 32, accuracy: 0.001)
+        XCTAssertGreaterThan(rect.y, 90)
+    }
+}
+
 final class MenuBarSuppressionTests: XCTestCase {
     func testRevealedAutoHideBarIsStillSuppressed() {
         XCTAssertTrue(MenuBarSuppression.shouldSuppress(menuBarReservesSpace: true, userAutoHidesMenuBar: true))
