@@ -104,10 +104,18 @@ public struct DockOcclusion: Equatable, Sendable {
         (max(tileSize, 16) * 1.4).rounded()
     }
 
-    /// Extra reach past the resting band while magnification is on.
+    /// The Dock's magnified-icon name bubble is about 22–30 pt tall.
+    public static let magnifiedLabelHeight: Double = 28
+    /// Gap under the bubble, plus a little room so it does not touch the grid.
+    public static let magnifiedLabelMargin: Double = 12
+
+    /// Extra reach past the resting band while magnification is on: the icon's
+    /// growth, then the name label above it. `largesize + label + margin` is the
+    /// same reach measured from the screen edge when the resting band is the tile.
     public static func magnificationOverflow(enabled: Bool, tileSize: Double, largeSize: Double) -> Double {
         guard enabled else { return 0 }
-        return max(0, largeSize - max(tileSize, 0))
+        let iconGrowth = max(0, largeSize - max(tileSize, 0))
+        return iconGrowth + magnifiedLabelHeight + magnifiedLabelMargin
     }
 
     public static func snapped(_ points: Double, scale: Double) -> Double {

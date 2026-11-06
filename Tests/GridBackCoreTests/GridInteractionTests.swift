@@ -304,13 +304,84 @@ final class GridOverlayLayoutTests: XCTestCase {
             magnificationOverflow: DockOcclusion.magnificationOverflow(enabled: true, tileSize: 64, largeSize: 128),
             scale: 2
         )
-        XCTAssertEqual(magnified.thickness, 154, accuracy: 0.001)
+        let label = DockOcclusion.magnifiedLabelHeight + DockOcclusion.magnifiedLabelMargin
+        XCTAssertEqual(magnified.thickness, 90 + (128 - 64) + label, accuracy: 0.001)
         let frames = GridOverlayFrames.make(
             screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
             occlusion: magnified
         )
-        XCTAssertEqual(frames.grid.y, 154, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.y, magnified.thickness, accuracy: 0.001)
         XCTAssertGreaterThan(frames.grid.y, 90)
+    }
+
+    func testMagnifiedBandIncludesTheHoverLabel() {
+        let label = DockOcclusion.magnifiedLabelHeight + DockOcclusion.magnifiedLabelMargin
+        XCTAssertGreaterThanOrEqual(DockOcclusion.magnifiedLabelHeight, 22)
+        XCTAssertLessThanOrEqual(DockOcclusion.magnifiedLabelHeight, 30)
+        XCTAssertGreaterThan(DockOcclusion.magnifiedLabelMargin, 0)
+        let overflow = DockOcclusion.magnificationOverflow(enabled: true, tileSize: 64, largeSize: 128)
+        XCTAssertEqual(overflow, (128 - 64) + label, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(90 + overflow, 128 + label)
+
+        let autoHide = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 0, left: 0, bottom: 0, right: 0),
+            autoHides: true,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: DockOcclusion.autoHideThickness(tileSize: 64),
+            magnificationOverflow: overflow,
+            scale: 2
+        )
+        XCTAssertEqual(autoHide.edge, .bottom)
+        XCTAssertEqual(autoHide.thickness, 90 + overflow, accuracy: 0.001)
+
+        let showing = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 33, left: 0, bottom: 90, right: 0),
+            autoHides: false,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: 0,
+            magnificationOverflow: overflow,
+            scale: 2
+        )
+        XCTAssertEqual(showing.thickness, autoHide.thickness, accuracy: 0.001)
+
+        let leftOverflow = DockOcclusion.magnificationOverflow(enabled: true, tileSize: 48, largeSize: 96)
+        let left = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 33, left: 80, bottom: 0, right: 0),
+            autoHides: false,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: 0,
+            magnificationOverflow: leftOverflow,
+            scale: 2
+        )
+        XCTAssertEqual(left.edge, .left)
+        XCTAssertEqual(left.thickness, 80 + (96 - 48) + label, accuracy: 0.001)
+
+        let right = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 33, left: 0, bottom: 0, right: 70),
+            autoHides: true,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: 90,
+            magnificationOverflow: overflow,
+            scale: 2
+        )
+        XCTAssertEqual(right.edge, .right)
+        XCTAssertEqual(right.thickness, 70 + overflow, accuracy: 0.001)
+
+        let frames = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: autoHide
+        )
+        XCTAssertEqual(frames.backdrop, PlacedRect(x: 0, y: 0, width: 1728, height: 1117))
+        XCTAssertEqual(frames.grid.y, autoHide.thickness, accuracy: 0.001)
+        let layout = LaunchGridLayout.make(
+            overlayWidth: frames.grid.width,
+            overlayHeight: frames.grid.height,
+            columns: 7,
+            rows: 5
+        )
+        XCTAssertGreaterThan(layout.pageControlCenterY, 0)
+        XCTAssertLessThan(layout.pageControlCenterY, frames.grid.height)
+        XCTAssertLessThanOrEqual(layout.originY + layout.gridHeight, frames.grid.height)
     }
 
     func testNoDockLeavesOneFullScreenGrid() {

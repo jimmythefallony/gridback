@@ -327,15 +327,16 @@ enum DesktopPicture {
 }
 
 enum DockClearanceReader {
-    /// Reads Dock geometry. Does not write Dock settings or presentation options.
+    /// Reads Dock geometry from disk. Does not write Dock settings or presentation options.
+    /// Called every time the grid opens, so a magnification toggle applies without a relaunch.
     static func current(on screen: NSScreen) -> DockOcclusion {
-        let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.dock") ?? [:]
-        let tile = number(domain["tilesize"]) ?? 64
-        let large = number(domain["largesize"]) ?? 128
-        let magnifies = flag(domain["magnification"])
-        let autoHides = flag(domain["autohide"])
+        CFPreferencesAppSynchronize("com.apple.dock" as CFString)
+        let tile = number(copy("tilesize")) ?? 64
+        let large = number(copy("largesize")) ?? 128
+        let magnifies = flag(copy("magnification"))
+        let autoHides = flag(copy("autohide"))
         let edge: DockEdge
-        switch domain["orientation"] as? String {
+        switch copy("orientation") as? String {
         case "left": edge = .left
         case "right": edge = .right
         default: edge = .bottom
@@ -350,6 +351,10 @@ enum DockClearanceReader {
         )
     }
 
+    private static func copy(_ key: String) -> Any? {
+        CFPreferencesCopyAppValue(key as CFString, "com.apple.dock" as CFString)
+    }
+
     private static func number(_ value: Any?) -> Double? {
         if let number = value as? NSNumber { return number.doubleValue }
         if let value = value as? Double { return value }
@@ -359,6 +364,7 @@ enum DockClearanceReader {
 
     private static func flag(_ value: Any?) -> Bool {
         if let number = value as? NSNumber { return number.boolValue }
+        if let value = value as? Bool { return value }
         return false
     }
 }
