@@ -17,8 +17,6 @@ final class OverlayController: NSObject {
     private var menuBarGeneration = 0
     /// One dismiss per open. Toggling twice would show the system launcher again.
     private var didDismissSystemLauncher = false
-    /// Policy before the overlay. Restored on close so we do not stay in the Dock.
-    private var savedActivationPolicy: NSApplication.ActivationPolicy?
     private var escapeMonitor: Any?
     private var activationObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
@@ -75,8 +73,9 @@ final class OverlayController: NSObject {
         }
         model.updateScreenReserve(reserve)
         // setMenuBarVisible(false) sets hideDock as well as hideMenuBar.
-        // autoHideMenuBar alone does not, but it only applies while we are
-        // the active app. An accessory app leaves the previous app's menu bar up.
+        // autoHideMenuBar alone does not hide the Dock, and on this OS it takes
+        // effect while GridBack stays an accessory app. Switching to .regular
+        // would flash a Dock icon.
         menuBarGeneration += 1
         let generation = menuBarGeneration
         // The system launcher can open with us, or already be underneath.
@@ -123,14 +122,9 @@ final class OverlayController: NSObject {
 
     private func claimKeyboard() {
         guard panel?.isVisible == true else { return }
-        if savedActivationPolicy == nil {
-            savedActivationPolicy = NSApp.activationPolicy()
-        }
-        if NSApp.activationPolicy() != .regular {
-            _ = NSApp.setActivationPolicy(.regular)
-        }
-        // Set the menu-bar option before activation so the system picks it up
-        // as we become the front app. Dock-hide flags are not added.
+        // Stay accessory for the whole lifetime so GridBack never appears in
+        // the Dock or in Command-Tab. autoHideMenuBar is applied around
+        // activation and never adds a Dock-hide flag.
         applyMenuBarPolicy()
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKey()
@@ -215,15 +209,11 @@ final class OverlayController: NSObject {
     }
 
     private func releaseMenuBarSuppression() {
-        guard menuBarSuppressed || savedPresentationOptions != nil || savedActivationPolicy != nil else { return }
+        guard menuBarSuppressed || savedPresentationOptions != nil else { return }
         menuBarSuppressed = false
         if let saved = savedPresentationOptions {
             NSApp.presentationOptions = saved
             savedPresentationOptions = nil
-        }
-        if let policy = savedActivationPolicy {
-            _ = NSApp.setActivationPolicy(policy)
-            savedActivationPolicy = nil
         }
     }
 
