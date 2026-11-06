@@ -105,27 +105,27 @@ final class MenuBarCoverPanel: NSPanel {
         appearance = NSAppearance(named: .darkAqua)
         ignoresMouseEvents = false
 
-        let effect = NSVisualEffectView(frame: contentView?.bounds ?? .zero)
-        effect.material = .fullScreenUI
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.autoresizingMask = [.width, .height]
-        // The blur can still pick up menu glyphs sitting immediately behind
-        // this strip. A dim layer keeps those glyphs from reading through.
-        let dim = NSView(frame: effect.bounds)
-        dim.wantsLayer = true
-        dim.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
-        dim.autoresizingMask = [.width, .height]
-        effect.addSubview(dim)
-        contentView = effect
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageAlignment = .alignCenter
+        imageView.imageFrameStyle = .none
+        imageView.autoresizingMask = [.width, .height]
+        let bounds = contentView?.bounds ?? NSRect(origin: .zero, size: frame.size)
+        imageView.frame = bounds
+        contentView = imageView
     }
 
-    func place(on screen: NSScreen) {
+    /// Shows the desktop picture, blurred and lifted like the grid material.
+    /// This window sits above the menu bar, so a live material would blur the bar instead.
+    func show(snapshot: NSImage, on screen: NSScreen) {
         setFrame(Self.frame(on: screen), display: true)
+        imageView.frame = contentView?.bounds ?? NSRect(origin: .zero, size: frame.size)
+        imageView.image = snapshot
         level = Self.coverLevel
         orderFrontRegardless()
         level = Self.coverLevel
     }
+
+    private let imageView = NSImageView()
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
