@@ -314,6 +314,26 @@ final class GridOverlayLayoutTests: XCTestCase {
         XCTAssertGreaterThan(frames.grid.y, 90)
     }
 
+    func testMissingLargeSizeUsesTheDefaultMagnifiedSize() {
+        XCTAssertEqual(DockOcclusion.largeSize(stored: nil, magnificationEnabled: true), 128, accuracy: 0.001)
+        XCTAssertEqual(DockOcclusion.largeSize(stored: 96, magnificationEnabled: true), 96, accuracy: 0.001)
+        XCTAssertEqual(DockOcclusion.largeSize(stored: nil, magnificationEnabled: false), 0, accuracy: 0.001)
+        let overflow = DockOcclusion.magnificationOverflow(
+            enabled: true,
+            tileSize: 64,
+            largeSize: DockOcclusion.largeSize(stored: nil, magnificationEnabled: true)
+        )
+        let band = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 0, left: 0, bottom: 0, right: 0),
+            autoHides: true,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: DockOcclusion.autoHideThickness(tileSize: 64),
+            magnificationOverflow: overflow,
+            scale: 2
+        )
+        XCTAssertEqual(band.thickness, 194, accuracy: 0.001)
+    }
+
     func testMagnifiedBandIncludesTheHoverLabel() {
         let label = DockOcclusion.magnifiedLabelHeight + DockOcclusion.magnifiedLabelMargin
         XCTAssertGreaterThanOrEqual(DockOcclusion.magnifiedLabelHeight, 22)

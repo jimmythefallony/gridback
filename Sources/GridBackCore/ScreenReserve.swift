@@ -104,6 +104,14 @@ public struct DockOcclusion: Equatable, Sendable {
         (max(tileSize, 16) * 1.4).rounded()
     }
 
+    /// Used when magnification is on and `largesize` has never been written.
+    public static let defaultMagnifiedSize: Double = 128
+
+    public static func largeSize(stored: Double?, magnificationEnabled: Bool) -> Double {
+        if let stored, stored > 0 { return stored }
+        return magnificationEnabled ? defaultMagnifiedSize : 0
+    }
+
     /// The Dock's magnified-icon name bubble is about 22–30 pt tall.
     public static let magnifiedLabelHeight: Double = 28
     /// Gap under the bubble, plus a little room so it does not touch the grid.
