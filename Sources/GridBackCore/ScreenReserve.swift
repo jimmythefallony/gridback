@@ -83,57 +83,138 @@ public enum MenuBarSuppression {
     }
 }
 
-/// Pixel size of one blurred desktop picture, and the rows that cover the menu bar.
-/// The strip is the top of that same picture, so both use one scale and one crop.
-public struct BackdropGeometry: Equatable, Sendable {
-    public var pixelWidth: Int
-    public var pixelHeight: Int
-    public var stripPixelHeight: Int
-    /// Point height of the strip after snapping to whole pixels.
-    public var stripPointHeight: Double
+public enum DockEdge: Equatable, Sendable {
+    case bottom, left, right
+}
 
-    public init(pixelWidth: Int, pixelHeight: Int, stripPixelHeight: Int, stripPointHeight: Double) {
-        self.pixelWidth = pixelWidth
-        self.pixelHeight = pixelHeight
-        self.stripPixelHeight = stripPixelHeight
-        self.stripPointHeight = stripPointHeight
+/// How much of the screen the high grid window must leave uncovered so the Dock,
+/// including a magnified icon, stays above it.
+public struct DockOcclusion: Equatable, Sendable {
+    public var edge: DockEdge
+    public var thickness: Double
+
+    public init(edge: DockEdge, thickness: Double) {
+        self.edge = edge
+        self.thickness = thickness
     }
 
-    public static func make(
-        screenWidth: Double,
-        screenHeight: Double,
-        scale: Double,
-        barPoints: Double
-    ) -> BackdropGeometry {
+    /// Resting Dock height estimated from the icon tile when auto-hide reserves nothing.
+    /// 64 pt tiles land on the 90 pt band this display uses when the Dock is showing.
+    public static func autoHideThickness(tileSize: Double) -> Double {
+        (max(tileSize, 16) * 1.4).rounded()
+    }
+
+    /// Extra reach past the resting band while magnification is on.
+    public static func magnificationOverflow(enabled: Bool, tileSize: Double, largeSize: Double) -> Double {
+        guard enabled else { return 0 }
+        return max(0, largeSize - max(tileSize, 0))
+    }
+
+    public static func snapped(_ points: Double, scale: Double) -> Double {
         let scale = max(scale, 1)
-        let pixelWidth = max(1, Int((screenWidth * scale).rounded()))
-        let pixelHeight = max(1, Int((screenHeight * scale).rounded()))
-        let stripPixelHeight = min(pixelHeight, max(1, Int((barPoints * scale).rounded())))
-        return BackdropGeometry(
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            stripPixelHeight: stripPixelHeight,
-            stripPointHeight: Double(stripPixelHeight) / scale
-        )
+        return (points * scale).rounded() / scale
+    }
+
+    /// Prefer the edge `visibleFrame` is already reserving. Auto-hide has no inset,
+    /// so the estimated band is used instead. Magnification is added on that edge.
+    public static func resolve(
+        reserve: ScreenReserve,
+        autoHides: Bool,
+        autoHideEdge: DockEdge,
+        estimatedAutoHideThickness: Double,
+        magnificationOverflow: Double,
+        scale: Double
+    ) -> DockOcclusion {
+        let reserved: [(DockEdge, Double)] = [
+            (.bottom, reserve.bottom),
+            (.left, reserve.left),
+            (.right, reserve.right)
+        ]
+        let resting: (DockEdge, Double)
+        if let edge = reserved.max(by: { $0.1 < $1.1 }), edge.1 > 0.5 {
+            resting = edge
+        } else if autoHides {
+            resting = (autoHideEdge, max(estimatedAutoHideThickness, 0))
+        } else {
+            resting = (.bottom, 0)
+        }
+        let thickness = snapped(resting.1 + max(0, magnificationOverflow), scale: scale)
+        return DockOcclusion(edge: resting.0, thickness: max(0, thickness))
     }
 }
 
-/// Where a cover sits over the menu bar. AppKit coordinates, origin at the bottom left.
-/// The cover is only as tall as the bar, so it does not overlap the Dock.
-public enum MenuBarCoverFrame {
-    public static func rect(
-        screenMinX: Double,
-        screenMinY: Double,
+public struct PlacedRect: Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+/// The interactive grid covers the menu bar and stops at the Dock.
+/// The backdrop is the full screen, behind the Dock, showing the same picture.
+public struct GridOverlayFrames: Equatable, Sendable {
+    public var grid: PlacedRect
+    public var backdrop: PlacedRect
+
+    public init(grid: PlacedRect, backdrop: PlacedRect) {
+        self.grid = grid
+        self.backdrop = backdrop
+    }
+
+    public static func make(
+        screenX: Double,
+        screenY: Double,
         screenWidth: Double,
         screenHeight: Double,
-        barHeight: Double
-    ) -> (x: Double, y: Double, width: Double, height: Double) {
-        let height = max(barHeight, 0)
-        return (
-            screenMinX,
-            screenMinY + screenHeight - height,
-            max(screenWidth, 0),
-            height
+        occlusion: DockOcclusion
+    ) -> GridOverlayFrames {
+        let width = max(screenWidth, 0)
+        let height = max(screenHeight, 0)
+        let backdrop = PlacedRect(x: screenX, y: screenY, width: width, height: height)
+        let span = occlusion.edge == .bottom ? height : width
+        let thickness = min(max(occlusion.thickness, 0), max(span - 1, 0))
+        let grid: PlacedRect
+        switch occlusion.edge {
+        case .bottom:
+            grid = PlacedRect(x: screenX, y: screenY + thickness, width: width, height: height - thickness)
+        case .left:
+            grid = PlacedRect(x: screenX + thickness, y: screenY, width: width - thickness, height: height)
+        case .right:
+            grid = PlacedRect(x: screenX, y: screenY, width: width - thickness, height: height)
+        }
+        return GridOverlayFrames(grid: grid, backdrop: backdrop)
+    }
+}
+
+/// Where the full-screen picture sits inside a window so both windows share pixels.
+/// AppKit origin is the bottom left. A window that starts above the Dock shifts the
+/// picture down by that same amount.
+public struct BackdropImagePlacement: Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    public static func inWindow(screen: PlacedRect, window: PlacedRect) -> BackdropImagePlacement {
+        BackdropImagePlacement(
+            x: screen.x - window.x,
+            y: screen.y - window.y,
+            width: screen.width,
+            height: screen.height
         )
     }
 }

@@ -231,45 +231,103 @@ final class MenuBarPresentationTests: XCTestCase {
     }
 }
 
-final class BackdropGeometryTests: XCTestCase {
-    func testRetinaMenuBandIsTheTopOfTheSamePicture() {
-        let geometry = BackdropGeometry.make(
-            screenWidth: 1728,
-            screenHeight: 1117,
-            scale: 2,
-            barPoints: 32
+final class GridOverlayLayoutTests: XCTestCase {
+    func testBottomDockWindowCoversTheMenuBarAndStopsAtTheDock() {
+        let frames = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: DockOcclusion(edge: .bottom, thickness: 90)
         )
-        XCTAssertEqual(geometry.pixelWidth, 3456)
-        XCTAssertEqual(geometry.pixelHeight, 2234)
-        XCTAssertEqual(geometry.stripPixelHeight, 64)
-        XCTAssertEqual(geometry.stripPointHeight, 32, accuracy: 0.001)
-        let seam = MenuBarCoverFrame.rect(
-            screenMinX: 0,
-            screenMinY: 0,
-            screenWidth: 1728,
-            screenHeight: 1117,
-            barHeight: geometry.stripPointHeight
-        )
-        XCTAssertEqual(seam.y, 1117 - 32, accuracy: 0.001)
-        XCTAssertEqual(seam.height, 32, accuracy: 0.001)
-        XCTAssertGreaterThan(seam.y, 90)
+        XCTAssertEqual(frames.grid.x, 0, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.y, 90, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.width, 1728, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.height, 1027, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.y + frames.grid.height, 1117, accuracy: 0.001)
+        XCTAssertEqual(frames.backdrop, PlacedRect(x: 0, y: 0, width: 1728, height: 1117))
+        let placed = BackdropImagePlacement.inWindow(screen: frames.backdrop, window: frames.grid)
+        XCTAssertEqual(placed.x, 0, accuracy: 0.001)
+        XCTAssertEqual(placed.y, -90, accuracy: 0.001)
+        XCTAssertEqual(placed.width, 1728, accuracy: 0.001)
+        XCTAssertEqual(placed.height, 1117, accuracy: 0.001)
     }
-}
 
-final class MenuBarCoverFrameTests: XCTestCase {
-    func testCoverSitsOnTheTopEdgeAndDoesNotReachTheDock() {
-        let rect = MenuBarCoverFrame.rect(
-            screenMinX: 0,
-            screenMinY: 0,
-            screenWidth: 1728,
-            screenHeight: 1117,
-            barHeight: 32
+    func testLeftAndRightDocksMirrorTheExcludedBand() {
+        let left = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: DockOcclusion(edge: .left, thickness: 80)
         )
-        XCTAssertEqual(rect.x, 0, accuracy: 0.001)
-        XCTAssertEqual(rect.y, 1085, accuracy: 0.001)
-        XCTAssertEqual(rect.width, 1728, accuracy: 0.001)
-        XCTAssertEqual(rect.height, 32, accuracy: 0.001)
-        XCTAssertGreaterThan(rect.y, 90)
+        XCTAssertEqual(left.grid, PlacedRect(x: 80, y: 0, width: 1648, height: 1117))
+        let right = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: DockOcclusion(edge: .right, thickness: 70)
+        )
+        XCTAssertEqual(right.grid, PlacedRect(x: 0, y: 0, width: 1658, height: 1117))
+    }
+
+    func testAutoHideReservesADockEdgeWhenVisibleFrameDoesNot() {
+        XCTAssertEqual(DockOcclusion.autoHideThickness(tileSize: 64), 90, accuracy: 0.001)
+        let reserve = ScreenReserve(top: 33, left: 0, bottom: 0, right: 0)
+        let occlusion = DockOcclusion.resolve(
+            reserve: reserve,
+            autoHides: true,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: DockOcclusion.autoHideThickness(tileSize: 64),
+            magnificationOverflow: 0,
+            scale: 2
+        )
+        XCTAssertEqual(occlusion.edge, .bottom)
+        XCTAssertEqual(occlusion.thickness, 90, accuracy: 0.001)
+        let frames = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: occlusion
+        )
+        XCTAssertEqual(frames.grid.y, 90, accuracy: 0.001)
+        XCTAssertEqual(frames.grid.y + frames.grid.height, 1117, accuracy: 0.001)
+    }
+
+    func testVisibleDockInsetWinsAndMagnificationExtendsIt() {
+        let reserve = ScreenReserve(top: 33, left: 0, bottom: 90, right: 0)
+        let resting = DockOcclusion.resolve(
+            reserve: reserve,
+            autoHides: true,
+            autoHideEdge: .left,
+            estimatedAutoHideThickness: 40,
+            magnificationOverflow: DockOcclusion.magnificationOverflow(enabled: false, tileSize: 64, largeSize: 128),
+            scale: 2
+        )
+        XCTAssertEqual(resting.edge, .bottom)
+        XCTAssertEqual(resting.thickness, 90, accuracy: 0.001)
+        let magnified = DockOcclusion.resolve(
+            reserve: reserve,
+            autoHides: false,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: 0,
+            magnificationOverflow: DockOcclusion.magnificationOverflow(enabled: true, tileSize: 64, largeSize: 128),
+            scale: 2
+        )
+        XCTAssertEqual(magnified.thickness, 154, accuracy: 0.001)
+        let frames = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: magnified
+        )
+        XCTAssertEqual(frames.grid.y, 154, accuracy: 0.001)
+        XCTAssertGreaterThan(frames.grid.y, 90)
+    }
+
+    func testNoDockLeavesOneFullScreenGrid() {
+        let occlusion = DockOcclusion.resolve(
+            reserve: ScreenReserve(top: 33, left: 0, bottom: 0, right: 0),
+            autoHides: false,
+            autoHideEdge: .bottom,
+            estimatedAutoHideThickness: 90,
+            magnificationOverflow: 0,
+            scale: 2
+        )
+        XCTAssertEqual(occlusion.thickness, 0, accuracy: 0.001)
+        let frames = GridOverlayFrames.make(
+            screenX: 0, screenY: 0, screenWidth: 1728, screenHeight: 1117,
+            occlusion: occlusion
+        )
+        XCTAssertEqual(frames.grid, frames.backdrop)
     }
 }
 

@@ -1,18 +1,18 @@
 import AppKit
 import GridBackCore
 
-/// Borderless panel sized to one display. It joins existing Spaces, including a
-/// full-screen app's Space, and does not become a full-screen Space of its own
+/// Borderless panel for the interactive grid. It joins existing Spaces, including
+/// a full-screen app's Space, and does not become a full-screen Space of its own
 /// (`fullScreenPrimary` is intentionally absent).
 final class OverlayPanel: NSPanel {
-    /// One level under the Dock, and still above normal and floating windows.
-    ///
-    /// The Dock process keeps drawing its own icons, size, order, magnification,
-    /// and translucent background. This panel does not change Dock preferences
-    /// or presentation options. The lock-screen shield stays above the grid.
-    static var overlayLevel: NSWindow.Level {
-        NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
+    /// Above the menu bar (24) and status items (25). The frame stops at the Dock,
+    /// so this does not cover the Dock even though 26 is above the Dock's 20.
+    static var gridLevel: NSWindow.Level {
+        NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 1)
     }
+
+    let backdropView = NSImageView()
+    let fallbackBlur = NSVisualEffectView()
 
     init(screen: NSScreen) {
         super.init(
@@ -22,10 +22,10 @@ final class OverlayPanel: NSPanel {
             defer: false
         )
         isFloatingPanel = true
-        isOpaque = false
-        backgroundColor = .clear
+        isOpaque = true
+        backgroundColor = .black
         hasShadow = false
-        level = Self.overlayLevel
+        level = Self.gridLevel
         // macOS rejects canJoinAllSpaces together with moveToActiveSpace.
         // Joining every Space keeps the grid on the primary display, including
         // over a full-screen app, without pulling the window onto another display.
@@ -46,65 +46,37 @@ final class OverlayPanel: NSPanel {
         title = "GridBack"
         identifier = NSUserInterfaceItemIdentifier("GridBackOverlay")
         appearance = NSAppearance(named: .darkAqua)
-        backdropView.imageScaling = .scaleAxesIndependently
-        backdropView.imageAlignment = .alignCenter
-        backdropView.imageFrameStyle = .none
-        backdropView.autoresizingMask = [.width, .height]
-        backdropView.wantsLayer = true
-        backdropView.layer?.backgroundColor = NSColor.clear.cgColor
-        fallbackBlur.material = .fullScreenUI
-        fallbackBlur.blendingMode = .behindWindow
-        fallbackBlur.state = .active
-        fallbackBlur.autoresizingMask = [.width, .height]
-        fallbackBlur.isHidden = true
+        ignoresMouseEvents = false
+        BackdropSurface.prepare(imageView: backdropView, fallback: fallbackBlur, in: self)
     }
-
-    let backdropView = NSImageView()
-    /// Shown only when the desktop picture cannot be read. Hidden whenever the
-    /// shared image is up, so it cannot tint that image.
-    let fallbackBlur = NSVisualEffectView()
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
 
-/// Paints over the menu bar only. The grid window stays under the Dock, so this
-/// strip is a separate window above the menu bar and nowhere near the Dock.
-final class MenuBarCoverPanel: NSPanel {
-    /// Above the menu bar and status items. The Dock is level 20 and is not
-    /// under this strip, so it stays visible.
-    static var coverLevel: NSWindow.Level {
-        NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 1)
+/// Full-screen picture behind the Dock. Level is one below the Dock, and the
+/// window does not accept clicks, so the Dock (including magnification) stays
+/// in front and still receives them.
+final class DockBackdropPanel: NSPanel {
+    static var backdropLevel: NSWindow.Level {
+        NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
     }
 
-    static func barPoints(on screen: NSScreen) -> CGFloat {
-        let revealed = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
-        return max(screen.safeAreaInsets.top, NSStatusBar.system.thickness, revealed, 24)
-    }
-
-    static func frame(on screen: NSScreen, height: CGFloat) -> NSRect {
-        let rect = MenuBarCoverFrame.rect(
-            screenMinX: Double(screen.frame.minX),
-            screenMinY: Double(screen.frame.minY),
-            screenWidth: Double(screen.frame.width),
-            screenHeight: Double(screen.frame.height),
-            barHeight: Double(height)
-        )
-        return NSRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
-    }
+    let backdropView = NSImageView()
+    let fallbackBlur = NSVisualEffectView()
 
     init(screen: NSScreen) {
         super.init(
-            contentRect: Self.frame(on: screen, height: Self.barPoints(on: screen)),
+            contentRect: screen.frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         isFloatingPanel = false
-        isOpaque = false
-        backgroundColor = .clear
+        isOpaque = true
+        backgroundColor = .black
         hasShadow = false
-        level = Self.coverLevel
+        level = Self.backdropLevel
         collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -119,34 +91,58 @@ final class MenuBarCoverPanel: NSPanel {
         animationBehavior = .none
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        title = "GridBack Menu Bar Cover"
-        identifier = NSUserInterfaceItemIdentifier("GridBackMenuBarCover")
+        title = "GridBack Dock Backdrop"
+        identifier = NSUserInterfaceItemIdentifier("GridBackDockBackdrop")
         appearance = NSAppearance(named: .darkAqua)
-        ignoresMouseEvents = false
-
-        imageView.imageScaling = .scaleAxesIndependently
-        imageView.imageAlignment = .alignCenter
-        imageView.imageFrameStyle = .none
-        imageView.autoresizingMask = [.width, .height]
-        imageView.wantsLayer = true
-        imageView.layer?.backgroundColor = NSColor.clear.cgColor
-        let bounds = contentView?.bounds ?? NSRect(origin: .zero, size: frame.size)
-        imageView.frame = bounds
-        contentView = imageView
+        ignoresMouseEvents = true
+        BackdropSurface.prepare(imageView: backdropView, fallback: fallbackBlur, in: self)
     }
-
-    /// `snapshot` is the top of the same picture the grid window is showing.
-    func show(snapshot: NSImage, on screen: NSScreen, height: CGFloat) {
-        setFrame(Self.frame(on: screen, height: height), display: true)
-        imageView.frame = contentView?.bounds ?? NSRect(origin: .zero, size: frame.size)
-        imageView.image = snapshot
-        level = Self.coverLevel
-        orderFrontRegardless()
-        level = Self.coverLevel
-    }
-
-    private let imageView = NSImageView()
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+enum BackdropSurface {
+    static func prepare(imageView: NSImageView, fallback: NSVisualEffectView, in window: NSWindow) {
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageAlignment = .alignCenter
+        imageView.imageFrameStyle = .none
+        imageView.wantsLayer = true
+        imageView.layer?.backgroundColor = NSColor.clear.cgColor
+        fallback.material = .fullScreenUI
+        fallback.blendingMode = .behindWindow
+        fallback.state = .active
+        fallback.isHidden = true
+        let container = NSView(frame: window.contentView?.bounds ?? .zero)
+        container.autoresizingMask = [.width, .height]
+        container.clipsToBounds = true
+        container.addSubview(imageView)
+        window.contentView = container
+    }
+
+    /// Places one full-screen picture in `window`'s coordinates. The material is
+    /// not in the hierarchy while that picture is showing, so it cannot tint it.
+    static func show(image: NSImage?, placement: NSRect, imageView: NSImageView, fallback: NSVisualEffectView, window: NSWindow) {
+        guard let image else {
+            imageView.image = nil
+            imageView.isHidden = true
+            let container = window.contentView
+            fallback.frame = container?.bounds ?? placement
+            fallback.autoresizingMask = [.width, .height]
+            if fallback.superview == nil {
+                container?.addSubview(fallback, positioned: .below, relativeTo: nil)
+            }
+            fallback.isHidden = false
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            return
+        }
+        fallback.isHidden = true
+        fallback.removeFromSuperview()
+        imageView.isHidden = false
+        imageView.frame = placement
+        imageView.image = image
+        window.isOpaque = true
+        window.backgroundColor = .black
+    }
 }
