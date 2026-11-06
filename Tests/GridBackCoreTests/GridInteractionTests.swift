@@ -231,6 +231,31 @@ final class MenuBarPresentationTests: XCTestCase {
     }
 }
 
+final class BackdropGeometryTests: XCTestCase {
+    func testRetinaMenuBandIsTheTopOfTheSamePicture() {
+        let geometry = BackdropGeometry.make(
+            screenWidth: 1728,
+            screenHeight: 1117,
+            scale: 2,
+            barPoints: 32
+        )
+        XCTAssertEqual(geometry.pixelWidth, 3456)
+        XCTAssertEqual(geometry.pixelHeight, 2234)
+        XCTAssertEqual(geometry.stripPixelHeight, 64)
+        XCTAssertEqual(geometry.stripPointHeight, 32, accuracy: 0.001)
+        let seam = MenuBarCoverFrame.rect(
+            screenMinX: 0,
+            screenMinY: 0,
+            screenWidth: 1728,
+            screenHeight: 1117,
+            barHeight: geometry.stripPointHeight
+        )
+        XCTAssertEqual(seam.y, 1117 - 32, accuracy: 0.001)
+        XCTAssertEqual(seam.height, 32, accuracy: 0.001)
+        XCTAssertGreaterThan(seam.y, 90)
+    }
+}
+
 final class MenuBarCoverFrameTests: XCTestCase {
     func testCoverSitsOnTheTopEdgeAndDoesNotReachTheDock() {
         let rect = MenuBarCoverFrame.rect(

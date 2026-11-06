@@ -86,6 +86,7 @@ final class OverlayController: NSObject {
         didDismissSystemLauncher = false
         dismissSystemLauncherIfNeeded()
         panel.alphaValue = 1
+        updateMenuBarCover(on: screen)
         NSApp.unhide(nil)
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
@@ -240,36 +241,48 @@ final class OverlayController: NSObject {
     }
 
     private func updateMenuBarCover(on screen: NSScreen) {
-        guard menuBarSuppressed, let panel, panel.isVisible else {
+        guard let panel else { return }
+        guard let backdrop = MenuBarCoverImage.backdrop(on: screen) else {
+            panel.backdropView.image = nil
+            panel.backdropView.isHidden = true
+            panel.fallbackBlur.isHidden = false
+            menuBarCover?.orderOut(nil)
+            return
+        }
+        panel.fallbackBlur.isHidden = true
+        panel.backdropView.isHidden = false
+        panel.backdropView.image = backdrop.full
+        guard menuBarSuppressed, panel.isVisible else {
             menuBarCover?.orderOut(nil)
             return
         }
         let cover = menuBarCover ?? MenuBarCoverPanel(screen: screen)
         menuBarCover = cover
-        guard let snapshot = MenuBarCoverImage.strip(on: screen) else { return }
-        cover.show(snapshot: snapshot, on: screen)
+        cover.show(snapshot: backdrop.strip, on: screen, height: backdrop.stripPointHeight)
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
         let panel = OverlayPanel(screen: screen)
-        let effect = NSVisualEffectView(frame: panel.contentView?.bounds ?? screen.frame)
-        effect.material = .fullScreenUI
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.autoresizingMask = [.width, .height]
-
+        let bounds = NSRect(origin: .zero, size: screen.frame.size)
+        let container = NSView(frame: bounds)
+        container.autoresizingMask = [.width, .height]
+        panel.fallbackBlur.frame = bounds
+        panel.backdropView.frame = bounds
+        container.addSubview(panel.fallbackBlur)
+        container.addSubview(panel.backdropView)
         let hosting = NSHostingView(rootView: OverlayRootView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.wantsLayer = true
+        hosting.layer?.isOpaque = false
         hosting.layer?.backgroundColor = NSColor.clear.cgColor
-        effect.addSubview(hosting)
+        panel.backdropView.addSubview(hosting)
         NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            hosting.topAnchor.constraint(equalTo: effect.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: effect.bottomAnchor)
+            hosting.leadingAnchor.constraint(equalTo: panel.backdropView.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: panel.backdropView.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: panel.backdropView.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: panel.backdropView.bottomAnchor)
         ])
-        panel.contentView = effect
+        panel.contentView = container
         return panel
     }
 }
@@ -319,121 +332,72 @@ enum SystemLauncherProbe {
     }
 }
 
+struct DesktopBackdrop {
+    var full: NSImage
+    var strip: NSImage
+    var stripPointHeight: CGFloat
+}
+
 enum MenuBarCoverImage {
     private static var cacheKey: String?
-    private static var cache: NSImage?
+    private static var cache: DesktopBackdrop?
 
-    /// The grid blurs the desktop. This strip uses that same picture, heavily
-    /// softened and lifted the way the full-screen material does, then keeps
-    /// only the top band. A material on the cover would blur the menu bar.
-    static func strip(on screen: NSScreen) -> NSImage? {
-        let height = MenuBarCoverPanel.frame(on: screen).height
-        guard height > 1, let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
-        let key = "\(url.path)|\(Int(screen.frame.width))x\(Int(screen.frame.height))|\(Int(height))"
+    /// One blurred desktop picture. The grid shows all of it. The strip shows
+    /// its top rows, at the same scale, so the two meet on a shared pixel row.
+    static func backdrop(on screen: NSScreen) -> DesktopBackdrop? {
+        guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        let barPoints = MenuBarCoverPanel.barPoints(on: screen)
+        let geometry = BackdropGeometry.make(
+            screenWidth: Double(screen.frame.width),
+            screenHeight: Double(screen.frame.height),
+            scale: Double(screen.backingScaleFactor),
+            barPoints: Double(barPoints)
+        )
+        let key = "\(url.path)|\(geometry.pixelWidth)x\(geometry.pixelHeight)|\(geometry.stripPixelHeight)"
         if key == cacheKey, let cache { return cache }
-        guard let image = render(url: url, screen: screen.frame.size, scale: screen.backingScaleFactor, stripHeight: height) else { return nil }
+        guard let rendered = render(url: url, screen: screen.frame.size, geometry: geometry) else { return nil }
         cacheKey = key
-        cache = image
-        return image
+        cache = rendered
+        return rendered
     }
 
-    private static func render(url: URL, screen: NSSize, scale: CGFloat, stripHeight: CGFloat) -> NSImage? {
+    private static func render(url: URL, screen: NSSize, geometry: BackdropGeometry) -> DesktopBackdrop? {
         guard let source = NSImage(contentsOf: url) else { return nil }
         var proposed = NSRect(origin: .zero, size: source.size)
         guard let wallpaper = source.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else { return nil }
-        let pixelW = max(1, Int((screen.width * scale).rounded()))
-        let pixelH = max(1, Int((screen.height * scale).rounded()))
+        let pixelW = CGFloat(geometry.pixelWidth)
+        let pixelH = CGFloat(geometry.pixelHeight)
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
-        let fit = max(CGFloat(pixelW) / srcW, CGFloat(pixelH) / srcH)
+        let fit = max(pixelW / srcW, pixelH / srcH)
         let placed = CIImage(cgImage: wallpaper)
             .transformed(by: CGAffineTransform(scaleX: fit, y: fit))
             .transformed(by: CGAffineTransform(
-                translationX: (CGFloat(pixelW) - srcW * fit) / 2,
-                y: (CGFloat(pixelH) - srcH * fit) / 2
+                translationX: (pixelW - srcW * fit) / 2,
+                y: (pixelH - srcH * fit) / 2
             ))
         let extent = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
-        let radius = Double(max(screen.width, screen.height)) * 0.12
+        // Radius is in the picture's pixels. 52 points keeps the wallpaper's
+        // vertical color (the sky band) instead of flattening it to one grey.
+        let scale = pixelH / max(screen.height, 1)
+        let radius = 52 * Double(scale)
         let blurred = placed.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
             .cropped(to: extent)
-        let context = CIContext()
-        guard let blurredImage = context.createCGImage(blurred, from: extent) else { return nil }
-        let average = averageColor(blurredImage)
-        let lifted = (
-            r: min(255.0, average.r * 0.96),
-            g: min(255.0, average.g * 0.55 + 78),
-            b: min(255.0, average.b * 0.45 + 100)
+        guard let fullImage = CIContext().createCGImage(blurred, from: extent) else { return nil }
+        let stripPixels = geometry.stripPixelHeight
+        guard let stripImage = fullImage.cropping(to: CGRect(
+            x: 0,
+            y: fullImage.height - stripPixels,
+            width: fullImage.width,
+            height: stripPixels
+        )) else { return nil }
+        let stripPoints = CGFloat(geometry.stripPointHeight)
+        return DesktopBackdrop(
+            full: NSImage(cgImage: fullImage, size: screen),
+            strip: NSImage(cgImage: stripImage, size: NSSize(width: screen.width, height: stripPoints)),
+            stripPointHeight: stripPoints
         )
-        guard let strip = blendTop(
-            blurredImage,
-            lifted: lifted,
-            localWeight: 0.12,
-            pixelHeight: max(1, Int((stripHeight * scale).rounded()))
-        ) else { return nil }
-        return NSImage(cgImage: strip, size: NSSize(width: screen.width, height: stripHeight))
-    }
-
-    private static func averageColor(_ image: CGImage) -> (r: Double, g: Double, b: Double) {
-        let sample = 24
-        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
-        let ctx = CGContext(
-            data: nil,
-            width: sample,
-            height: sample,
-            bitsPerComponent: 8,
-            bytesPerRow: sample * 4,
-            space: cs,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )!
-        ctx.interpolationQuality = .medium
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: sample, height: sample))
-        guard let data = ctx.data else { return (128, 128, 128) }
-        let bytes = data.bindMemory(to: UInt8.self, capacity: sample * sample * 4)
-        var r = 0.0, g = 0.0, b = 0.0
-        let count = sample * sample
-        for i in 0..<count {
-            r += Double(bytes[i * 4])
-            g += Double(bytes[i * 4 + 1])
-            b += Double(bytes[i * 4 + 2])
-        }
-        return (r / Double(count), g / Double(count), b / Double(count))
-    }
-
-    private static func blendTop(
-        _ image: CGImage,
-        lifted: (r: Double, g: Double, b: Double),
-        localWeight: Double,
-        pixelHeight: Int
-    ) -> CGImage? {
-        let width = image.width
-        let height = min(pixelHeight, image.height)
-        // CGImage's crop rect origin is the lower left. The menu bar is the top.
-        let crop = image.cropping(to: CGRect(x: 0, y: image.height - height, width: width, height: height))
-        guard let crop else { return nil }
-        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
-        let ctx = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: cs,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )
-        guard let ctx, let dest = ctx.data else { return nil }
-        ctx.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let out = dest.bindMemory(to: UInt8.self, capacity: width * height * 4)
-        let keep = localWeight
-        let wash = 1 - localWeight
-        for i in 0..<(width * height) {
-            let d = i * 4
-            out[d] = UInt8(min(255, Double(out[d]) * keep + lifted.r * wash))
-            out[d + 1] = UInt8(min(255, Double(out[d + 1]) * keep + lifted.g * wash))
-            out[d + 2] = UInt8(min(255, Double(out[d + 2]) * keep + lifted.b * wash))
-            out[d + 3] = 255
-        }
-        return ctx.makeImage()
     }
 }
 

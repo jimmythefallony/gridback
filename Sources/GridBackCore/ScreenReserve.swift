@@ -83,6 +83,41 @@ public enum MenuBarSuppression {
     }
 }
 
+/// Pixel size of one blurred desktop picture, and the rows that cover the menu bar.
+/// The strip is the top of that same picture, so both use one scale and one crop.
+public struct BackdropGeometry: Equatable, Sendable {
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    public var stripPixelHeight: Int
+    /// Point height of the strip after snapping to whole pixels.
+    public var stripPointHeight: Double
+
+    public init(pixelWidth: Int, pixelHeight: Int, stripPixelHeight: Int, stripPointHeight: Double) {
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.stripPixelHeight = stripPixelHeight
+        self.stripPointHeight = stripPointHeight
+    }
+
+    public static func make(
+        screenWidth: Double,
+        screenHeight: Double,
+        scale: Double,
+        barPoints: Double
+    ) -> BackdropGeometry {
+        let scale = max(scale, 1)
+        let pixelWidth = max(1, Int((screenWidth * scale).rounded()))
+        let pixelHeight = max(1, Int((screenHeight * scale).rounded()))
+        let stripPixelHeight = min(pixelHeight, max(1, Int((barPoints * scale).rounded())))
+        return BackdropGeometry(
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            stripPixelHeight: stripPixelHeight,
+            stripPointHeight: Double(stripPixelHeight) / scale
+        )
+    }
+}
+
 /// Where a cover sits over the menu bar. AppKit coordinates, origin at the bottom left.
 /// The cover is only as tall as the bar, so it does not overlap the Dock.
 public enum MenuBarCoverFrame {
