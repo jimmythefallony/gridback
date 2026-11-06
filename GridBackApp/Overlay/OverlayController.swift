@@ -17,6 +17,8 @@ final class OverlayController: NSObject {
     private var didDismissSystemLauncher = false
     private var escapeMonitor: Any?
     private var activationObserver: NSObjectProtocol?
+    private var dockWatch: Timer?
+    private var appliedOcclusion: DockOcclusion?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
@@ -58,7 +60,7 @@ final class OverlayController: NSObject {
         // icon layout uses the window itself and is not inset a second time.
         // Read the Dock band before activation. Activating can reveal the menu
         // bar and change the top inset; the Dock edge does not depend on that.
-        let occlusion = DockClearanceReader.current(on: screen)
+        let occlusion = DockClearanceReader.current(on: screen).occlusion
         place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
         model.updateScreenReserve(.none)
         showGeneration += 1
@@ -79,9 +81,9 @@ final class OverlayController: NSObject {
         panel.level = OverlayPanel.gridLevel
         backdrop.level = DockBackdropPanel.backdropLevel
         claimKeyboard()
-        let frame = panel.frame
         installEscapeMonitor()
-        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) backdrop=\(NSStringFromRect(backdrop.frame), privacy: .public) backdropLevel=\(backdrop.level.rawValue, privacy: .public) dockEdge=\(String(describing: occlusion.edge), privacy: .public) dockThickness=\(occlusion.thickness, privacy: .public)")
+        startDockWatch()
+        logDockBand(panel: panel, backdrop: backdrop, on: screen)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.showGeneration == generation, self.panel?.isVisible == true else { return }
             self.claimKeyboard()
@@ -105,8 +107,42 @@ final class OverlayController: NSObject {
         // background click does not dismiss into Launchpad.
         dismissSystemLauncherIfNeeded()
         showGeneration += 1
+        stopDockWatch()
         dockBackdrop?.orderOut(nil)
         panel?.orderOut(nil)
+    }
+
+    /// Dock preferences can land on disk after the Dock has already started magnifying.
+    /// Keep looking while the grid is up so the band moves without a relaunch.
+    private func startDockWatch() {
+        stopDockWatch()
+        let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+            self?.refreshDockBandIfNeeded()
+        }
+        dockWatch = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopDockWatch() {
+        dockWatch?.invalidate()
+        dockWatch = nil
+        appliedOcclusion = nil
+    }
+
+    private func refreshDockBandIfNeeded() {
+        guard panel?.isVisible == true, let screen = PrimaryDisplay.screen() else { return }
+        let occlusion = DockClearanceReader.current(on: screen).occlusion
+        guard occlusion != appliedOcclusion else { return }
+        relayout(on: screen)
+        if let panel, let backdrop = dockBackdrop {
+            logDockBand(panel: panel, backdrop: backdrop, on: screen)
+        }
+    }
+
+    private func logDockBand(panel: OverlayPanel, backdrop: DockBackdropPanel, on screen: NSScreen) {
+        let reading = DockClearanceReader.current(on: screen)
+        let frame = panel.frame
+        log.info("Dock band magnification=\(reading.magnifies, privacy: .public) largesize=\(reading.largeSize, privacy: .public) largesizeStored=\(reading.largeSizeWasStored, privacy: .public) tilesize=\(reading.tileSize, privacy: .public) autohide=\(reading.autoHides, privacy: .public) orientation=\(reading.orientation, privacy: .public) source=\(reading.source, privacy: .public) thickness=\(reading.occlusion.thickness, privacy: .public) edge=\(String(describing: reading.occlusion.edge), privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) backdrop=\(NSStringFromRect(backdrop.frame), privacy: .public) backdropLevel=\(backdrop.level.rawValue, privacy: .public)")
     }
 
     private func claimKeyboard() {
@@ -178,7 +214,7 @@ final class OverlayController: NSObject {
         guard let panel, let model else { return }
         let backdrop = dockBackdrop ?? DockBackdropPanel(screen: screen)
         dockBackdrop = backdrop
-        let occlusion = DockClearanceReader.current(on: screen)
+        let occlusion = DockClearanceReader.current(on: screen).occlusion
         place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
         model.updateScreenReserve(.none)
         panel.level = OverlayPanel.gridLevel
@@ -215,6 +251,7 @@ final class OverlayController: NSObject {
             fallback: backdrop.fallbackBlur,
             window: backdrop
         )
+        appliedOcclusion = occlusion
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
@@ -326,22 +363,42 @@ enum DesktopPicture {
     }
 }
 
+struct DockReading: Equatable {
+    var magnifies: Bool
+    var largeSize: Double
+    var largeSizeWasStored: Bool
+    var tileSize: Double
+    var autoHides: Bool
+    var orientation: String
+    var source: String
+    var occlusion: DockOcclusion
+}
+
 enum DockClearanceReader {
-    /// Reads Dock geometry from disk. Does not write Dock settings or presentation options.
-    /// Called every time the grid opens, so a magnification toggle applies without a relaunch.
-    static func current(on screen: NSScreen) -> DockOcclusion {
+    /// Reads Dock geometry from the plist and from cfprefsd. Does not write settings.
+    /// A missing `largesize` with magnification on uses 128. Called on each open and
+    /// while the grid is visible, because the Dock can magnify before the key is flushed.
+    static func current(on screen: NSScreen) -> DockReading {
         CFPreferencesAppSynchronize("com.apple.dock" as CFString)
-        let tile = number(copy("tilesize")) ?? 64
-        let large = number(copy("largesize")) ?? 128
-        let magnifies = flag(copy("magnification"))
-        let autoHides = flag(copy("autohide"))
+        let file = readPlist()
+        let cfMagnifies = flag(copy("magnification"))
+        let fileMagnifies = flag(file?["magnification"])
+        let magnifies = cfMagnifies || fileMagnifies
+        let cfLarge = number(copy("largesize"))
+        let fileLarge = number(file?["largesize"])
+        let storedLarge = cfLarge ?? fileLarge
+        let tile = number(copy("tilesize")) ?? number(file?["tilesize"]) ?? 64
+        let autoHides = flag(copy("autohide")) || flag(file?["autohide"])
+        let orientation = (copy("orientation") as? String) ?? (file?["orientation"] as? String) ?? "bottom"
         let edge: DockEdge
-        switch copy("orientation") as? String {
+        switch orientation {
         case "left": edge = .left
         case "right": edge = .right
         default: edge = .bottom
         }
-        return DockOcclusion.resolve(
+        let large = DockOcclusion.largeSize(stored: storedLarge, magnificationEnabled: magnifies)
+        let source = "cf=\(cfMagnifies) file=\(fileMagnifies)"
+        let occlusion = DockOcclusion.resolve(
             reserve: ScreenReserveReader.current(on: screen),
             autoHides: autoHides,
             autoHideEdge: edge,
@@ -349,10 +406,35 @@ enum DockClearanceReader {
             magnificationOverflow: DockOcclusion.magnificationOverflow(enabled: magnifies, tileSize: tile, largeSize: large),
             scale: Double(screen.backingScaleFactor)
         )
+        return DockReading(
+            magnifies: magnifies,
+            largeSize: large,
+            largeSizeWasStored: storedLarge != nil,
+            tileSize: tile,
+            autoHides: autoHides,
+            orientation: orientation,
+            source: source,
+            occlusion: occlusion
+        )
+    }
+
+    private static func readPlist() -> [String: Any]? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/com.apple.dock.plist")
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            return nil
+        }
+        return plist
     }
 
     private static func copy(_ key: String) -> Any? {
-        CFPreferencesCopyAppValue(key as CFString, "com.apple.dock" as CFString)
+        CFPreferencesCopyValue(
+            key as CFString,
+            "com.apple.dock" as CFString,
+            kCFPreferencesCurrentUser,
+            kCFPreferencesAnyHost
+        )
     }
 
     private static func number(_ value: Any?) -> Double? {
