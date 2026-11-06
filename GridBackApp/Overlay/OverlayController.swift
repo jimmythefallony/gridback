@@ -17,6 +17,10 @@ final class OverlayController: NSObject {
     private var menuBarGeneration = 0
     /// One dismiss per open. Toggling twice would show the system launcher again.
     private var didDismissSystemLauncher = false
+    /// Policy before the overlay. Restored on close so we do not stay in the Dock.
+    private var savedActivationPolicy: NSApplication.ActivationPolicy?
+    private var escapeMonitor: Any?
+    private var activationObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
@@ -28,6 +32,15 @@ final class OverlayController: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 self?.relayoutIfVisible()
+            }
+        }
+        if activationObserver == nil {
+            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                self?.otherApplicationDidActivate(notification)
             }
         }
     }
@@ -50,16 +63,22 @@ final class OverlayController: NSObject {
         // Read this before activation. Activating an accessory app reveals the
         // menu bar, and visibleFrame would then report a top inset that the
         // user did not reserve.
-        let reserve = ScreenReserveReader.current(on: screen)
+        var reserve = ScreenReserveReader.current(on: screen)
+        // A revealed auto-hide bar still has a top inset. The preference, not
+        // that momentary inset, decides whether we keep it hidden.
+        menuBarSuppressed = MenuBarSuppression.shouldSuppress(
+            menuBarReservesSpace: reserve.menuBarReservesSpace,
+            userAutoHidesMenuBar: MenuBarPreference.userAutoHidesMenuBar
+        )
+        if menuBarSuppressed {
+            reserve.top = 0
+        }
         model.updateScreenReserve(reserve)
-        // setMenuBarVisible(false) sets hideDock as well as hideMenuBar, which
-        // removes the Dock. autoHideMenuBar alone does not.
+        // setMenuBarVisible(false) sets hideDock as well as hideMenuBar.
+        // autoHideMenuBar alone does not, but it only applies while we are
+        // the active app. An accessory app leaves the previous app's menu bar up.
         menuBarGeneration += 1
         let generation = menuBarGeneration
-        menuBarSuppressed = !reserve.menuBarReservesSpace
-        if menuBarSuppressed {
-            applyMenuBarPolicy()
-        }
         // The system launcher can open with us, or already be underneath.
         // Close it before we take the keyboard, and only once: the Dock
         // notification toggles, so a second send would open it again.
@@ -67,18 +86,14 @@ final class OverlayController: NSObject {
         dismissSystemLauncherIfNeeded()
         panel.alphaValue = 1
         NSApp.unhide(nil)
-        // Cooperative activate() does not steal the keyboard from Launchpad,
-        // so Escape and typing never arrive until a later click.
-        NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         panel.makeKey()
         panel.level = OverlayPanel.overlayLevel
-        if menuBarSuppressed {
-            applyMenuBarPolicy()
-        }
+        claimKeyboard()
         let frame = panel.frame
-        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public)")
+        installEscapeMonitor()
+        log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public) options=\(NSApp.presentationOptions.rawValue, privacy: .public)")
         DispatchQueue.main.async { [weak self] in
             guard let self, self.menuBarGeneration == generation, self.panel?.isVisible == true else { return }
             self.claimKeyboard()
@@ -92,6 +107,7 @@ final class OverlayController: NSObject {
     }
 
     func hide() {
+        removeEscapeMonitor()
         // If the system launcher is still underneath, close it with us so a
         // background click does not dismiss into Launchpad.
         dismissSystemLauncherIfNeeded()
@@ -107,8 +123,60 @@ final class OverlayController: NSObject {
 
     private func claimKeyboard() {
         guard panel?.isVisible == true else { return }
+        if savedActivationPolicy == nil {
+            savedActivationPolicy = NSApp.activationPolicy()
+        }
+        if NSApp.activationPolicy() != .regular {
+            _ = NSApp.setActivationPolicy(.regular)
+        }
+        // Set the menu-bar option before activation so the system picks it up
+        // as we become the front app. Dock-hide flags are not added.
+        applyMenuBarPolicy()
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKey()
+        applyMenuBarPolicy()
+    }
+
+    private func otherApplicationDidActivate(_ notification: Notification) {
+        guard panel?.isVisible == true, let model else { return }
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            return
+        }
+        if app.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            return
+        }
+        if let own = Bundle.main.bundleIdentifier, app.bundleIdentifier == own {
+            return
+        }
+        // The Dock process itself is not the app the user just launched.
+        if app.bundleIdentifier == SystemLauncherVisibility.dockBundleID {
+            return
+        }
+        let bundle = app.bundleIdentifier ?? "unknown"
+        log.info("Hiding grid because \(bundle, privacy: .public) became active")
+        model.hideOverlay()
+    }
+
+    private func installEscapeMonitor() {
+        guard escapeMonitor == nil else { return }
+        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) {
+                return
+            }
+            DispatchQueue.main.async {
+                guard self?.panel?.isVisible == true else { return }
+                self?.model?.hideOverlay()
+            }
+        }
+    }
+
+    private func removeEscapeMonitor() {
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+            self.escapeMonitor = nil
+        }
     }
 
     private func dismissSystemLauncherIfNeeded() {
@@ -147,11 +215,15 @@ final class OverlayController: NSObject {
     }
 
     private func releaseMenuBarSuppression() {
-        guard menuBarSuppressed || savedPresentationOptions != nil else { return }
+        guard menuBarSuppressed || savedPresentationOptions != nil || savedActivationPolicy != nil else { return }
         menuBarSuppressed = false
         if let saved = savedPresentationOptions {
             NSApp.presentationOptions = saved
             savedPresentationOptions = nil
+        }
+        if let policy = savedActivationPolicy {
+            _ = NSApp.setActivationPolicy(policy)
+            savedActivationPolicy = nil
         }
     }
 
@@ -232,6 +304,21 @@ enum SystemLauncherProbe {
         if let number = value as? NSNumber { return number.intValue }
         if let value = value as? Int { return value }
         return 0
+    }
+}
+
+enum MenuBarPreference {
+    /// Desktop & Dock "Automatically hide and show the menu bar" on this OS.
+    /// Read only. A revealed bar still occupies `visibleFrame`, so the inset alone
+    /// cannot tell a temporary reveal from a menu bar that is always visible.
+    static var userAutoHidesMenuBar: Bool {
+        guard let value = UserDefaults.standard.persistentDomain(forName: "com.apple.WindowManager")?["AutoHide"] else {
+            return false
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        return false
     }
 }
 

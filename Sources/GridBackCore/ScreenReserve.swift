@@ -74,3 +74,11 @@ public enum MenuBarPresentation {
         return next
     }
 }
+
+/// Whether the grid should keep the menu bar from staying revealed.
+/// A bar that is only popped open still counts as auto-hidden when that is the user's preference.
+public enum MenuBarSuppression {
+    public static func shouldSuppress(menuBarReservesSpace: Bool, userAutoHidesMenuBar: Bool) -> Bool {
+        userAutoHidesMenuBar || !menuBarReservesSpace
+    }
+}

@@ -231,6 +231,14 @@ final class MenuBarPresentationTests: XCTestCase {
     }
 }
 
+final class MenuBarSuppressionTests: XCTestCase {
+    func testRevealedAutoHideBarIsStillSuppressed() {
+        XCTAssertTrue(MenuBarSuppression.shouldSuppress(menuBarReservesSpace: true, userAutoHidesMenuBar: true))
+        XCTAssertTrue(MenuBarSuppression.shouldSuppress(menuBarReservesSpace: false, userAutoHidesMenuBar: false))
+        XCTAssertFalse(MenuBarSuppression.shouldSuppress(menuBarReservesSpace: true, userAutoHidesMenuBar: false))
+    }
+}
+
 final class LaunchGridLayoutTests: XCTestCase {
     func testSideMarginsAreAboutNinePercentAndEachPageIsFullWidth() {
         for width in [1728.0, 2560.0, 3440.0] {
