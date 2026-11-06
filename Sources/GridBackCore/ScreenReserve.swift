@@ -82,3 +82,23 @@ public enum MenuBarSuppression {
         userAutoHidesMenuBar || !menuBarReservesSpace
     }
 }
+
+/// Where a cover sits over the menu bar. AppKit coordinates, origin at the bottom left.
+/// The cover is only as tall as the bar, so it does not overlap the Dock.
+public enum MenuBarCoverFrame {
+    public static func rect(
+        screenMinX: Double,
+        screenMinY: Double,
+        screenWidth: Double,
+        screenHeight: Double,
+        barHeight: Double
+    ) -> (x: Double, y: Double, width: Double, height: Double) {
+        let height = max(barHeight, 0)
+        return (
+            screenMinX,
+            screenMinY + screenHeight - height,
+            max(screenWidth, 0),
+            height
+        )
+    }
+}

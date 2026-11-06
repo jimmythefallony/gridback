@@ -7,6 +7,7 @@ import SwiftUI
 /// Use this on the main thread.
 final class OverlayController: NSObject {
     private var panel: OverlayPanel?
+    private var menuBarCover: MenuBarCoverPanel?
     private var model: GridBackModel?
     private var screenObserver: NSObjectProtocol?
     /// True while this overlay is keeping an auto-hidden menu bar from being revealed.
@@ -90,6 +91,7 @@ final class OverlayController: NSObject {
         panel.makeKey()
         panel.level = OverlayPanel.overlayLevel
         claimKeyboard()
+        updateMenuBarCover(on: screen)
         let frame = panel.frame
         installEscapeMonitor()
         log.info("Panel ordered front visible=\(panel.isVisible, privacy: .public) occlusion=\(panel.occlusionState.rawValue, privacy: .public) frame=\(NSStringFromRect(frame), privacy: .public) screen=\(NSStringFromRect(screen.frame), privacy: .public) level=\(panel.level.rawValue, privacy: .public) reserve top=\(reserve.top, privacy: .public) left=\(reserve.left, privacy: .public) bottom=\(reserve.bottom, privacy: .public) right=\(reserve.right, privacy: .public) menuBarSuppressed=\(self.menuBarSuppressed, privacy: .public) options=\(NSApp.presentationOptions.rawValue, privacy: .public)")
@@ -110,6 +112,7 @@ final class OverlayController: NSObject {
         // If the system launcher is still underneath, close it with us so a
         // background click does not dismiss into Launchpad.
         dismissSystemLauncherIfNeeded()
+        menuBarCover?.orderOut(nil)
         panel?.orderOut(nil)
         let generation = menuBarGeneration
         // Restore after the app resigns so the bar does not flash while we
@@ -221,11 +224,22 @@ final class OverlayController: NSObject {
         guard let panel, panel.isVisible, let screen = PrimaryDisplay.screen(), let model else { return }
         panel.level = OverlayPanel.overlayLevel
         panel.setFrame(screen.frame, display: true)
+        updateMenuBarCover(on: screen)
         var reserve = ScreenReserveReader.current(on: screen)
         if menuBarSuppressed {
             reserve.top = 0
         }
         model.updateScreenReserve(reserve)
+    }
+
+    private func updateMenuBarCover(on screen: NSScreen) {
+        guard menuBarSuppressed else {
+            menuBarCover?.orderOut(nil)
+            return
+        }
+        let cover = menuBarCover ?? MenuBarCoverPanel(screen: screen)
+        menuBarCover = cover
+        cover.place(on: screen)
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
