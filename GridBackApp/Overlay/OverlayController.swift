@@ -1,5 +1,5 @@
+import Accelerate
 import AppKit
-import CoreImage
 import GridBackCore
 import ImageIO
 import os
@@ -442,30 +442,80 @@ enum DesktopPicture {
         cache = image
     }
 
-    /// Blurs the desktop picture. Call this off the main thread.
+    /// Blurs the desktop picture on the calling thread. Core Image is not used:
+    /// its Gaussian filter waits on a Default-QoS worker and trips the hang checker.
     static func render(_ job: DesktopPictureJob) -> CGImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(job.url as CFURL, sourceOptions),
               let wallpaper = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let pixelW = CGFloat(job.pixelWidth)
-        let pixelH = CGFloat(job.pixelHeight)
+        let width = job.pixelWidth
+        let height = job.pixelHeight
+        guard width > 0, height > 0 else { return nil }
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
         guard srcW > 0, srcH > 0 else { return nil }
+        let pixelW = CGFloat(width)
+        let pixelH = CGFloat(height)
         let fit = max(pixelW / srcW, pixelH / srcH)
-        let placed = CIImage(cgImage: wallpaper)
-            .transformed(by: CGAffineTransform(scaleX: fit, y: fit))
-            .transformed(by: CGAffineTransform(
-                translationX: (pixelW - srcW * fit) / 2,
-                y: (pixelH - srcH * fit) / 2
-            ))
-        let extent = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
-        let scale = pixelH / max(job.pointSize.height, 1)
-        let radius = 52 * Double(scale)
-        let blurred = placed.clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-            .cropped(to: extent)
-        return CIContext().createCGImage(blurred, from: extent)
+        let drawnW = srcW * fit
+        let drawnH = srcH * fit
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ), let pixels = context.data else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(
+            wallpaper,
+            in: CGRect(x: (pixelW - drawnW) / 2, y: (pixelH - drawnH) / 2, width: drawnW, height: drawnH)
+        )
+        var sourceBuffer = vImage_Buffer(
+            data: pixels,
+            height: vImagePixelCount(height),
+            width: vImagePixelCount(width),
+            rowBytes: width * 4
+        )
+        var scratch = vImage_Buffer()
+        let allocated = vImageBuffer_Init(
+            &scratch,
+            vImagePixelCount(height),
+            vImagePixelCount(width),
+            32,
+            vImage_Flags(kvImageNoFlags)
+        )
+        guard allocated == kvImageNoError, scratch.data != nil else { return nil }
+        defer { free(scratch.data) }
+        let sigma = 52 * Double(height) / Double(max(job.pointSize.height, 1))
+        var resultInScratch = false
+        let kernelLimit = min(width, height)
+        for kernel in GaussianBoxKernel.sizes(sigma: sigma, passes: 3) {
+            let fitted = kernel <= kernelLimit ? kernel : (kernelLimit % 2 == 1 ? kernelLimit : max(kernelLimit - 1, 1))
+            let size = UInt32(fitted)
+            let error: vImage_Error
+            if resultInScratch {
+                error = vImageBoxConvolve_ARGB8888(
+                    &scratch, &sourceBuffer, nil, 0, 0, size, size, nil, vImage_Flags(kvImageEdgeExtend)
+                )
+            } else {
+                error = vImageBoxConvolve_ARGB8888(
+                    &sourceBuffer, &scratch, nil, 0, 0, size, size, nil, vImage_Flags(kvImageEdgeExtend)
+                )
+            }
+            guard error == kvImageNoError else { return nil }
+            resultInScratch.toggle()
+        }
+        if resultInScratch {
+            guard vImageCopyBuffer(&scratch, &sourceBuffer, 4, vImage_Flags(kvImageNoFlags)) == kvImageNoError else {
+                return nil
+            }
+        }
+        return context.makeImage()
     }
 }
 

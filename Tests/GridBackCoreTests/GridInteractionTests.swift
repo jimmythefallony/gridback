@@ -263,6 +263,15 @@ final class PicturePreparationTests: XCTestCase {
         ))
     }
 
+    func testBoxKernelsStayOddAndMatchTheRetinaBlur() {
+        let tiny = GaussianBoxKernel.sizes(sigma: 0, passes: 3)
+        XCTAssertEqual(tiny, [1, 1, 1])
+        let retina = GaussianBoxKernel.sizes(sigma: 104, passes: 3)
+        XCTAssertEqual(retina.count, 3)
+        XCTAssertTrue(retina.allSatisfy { $0 >= 1 && $0 % 2 == 1 })
+        XCTAssertGreaterThan(retina.max() ?? 0, 1)
+    }
+
     func testPictureWorkLeavesTheMainThreadAndAppliesBackOnIt() {
         let finished = expectation(description: "applied on main")
         var workWasOnMain: Bool?
