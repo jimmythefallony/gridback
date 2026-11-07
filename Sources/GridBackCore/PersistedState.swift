@@ -1,7 +1,7 @@
 import Foundation
 
 public struct PersistedState: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var layout: Layout
@@ -15,7 +15,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
 
     public func repaired() -> PersistedState {
         PersistedState(
-            version: version,
+            version: PersistedState.currentVersion,
             layout: LayoutEditor.repair(layout),
             shortcut: shortcut
         )

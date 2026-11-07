@@ -106,6 +106,17 @@ public struct LaunchGridLayout: Equatable, Sendable {
         return row * columns + column
     }
 
+    /// The pointer is over the icon artwork, not the label or the gap around the cell.
+    public func isOverIconCenter(x: Double, y: Double, slot: Int) -> Bool {
+        guard slot >= 0, columns > 0 else { return false }
+        let centerX = originX + columnCenter(slot)
+        let centerY = originY + rowCenter(slot) - (labelHeight + iconLabelGap) / 2
+        let dx = x - centerX
+        let dy = y - centerY
+        let radius = iconSide * 0.5
+        return dx * dx + dy * dy <= radius * radius
+    }
+
     public func columnCenter(_ slot: Int) -> Double {
         let column = slot % columns
         return (Double(column) + 0.5) * columnStride
