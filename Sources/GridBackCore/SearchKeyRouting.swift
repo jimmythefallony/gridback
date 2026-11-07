@@ -25,6 +25,7 @@ public enum SearchKeyAction: Equatable, Sendable {
     case launchSelected
     case moveSelection(delta: Int)
     case changePage(delta: Int)
+    case closeFolder
     case ignored
 }
 
@@ -47,10 +48,13 @@ public enum SearchKeyRouting {
         characters: String,
         modifiers: KeyModifiers,
         isSearching: Bool,
-        columns: Int
+        columns: Int,
+        folderIsOpen: Bool = false
     ) -> SearchKeyAction {
         if keyCode == escapeKeyCode && !modifiers.isCommandChord {
-            return isSearching ? .clearSearch : .dismiss
+            if isSearching { return .clearSearch }
+            if folderIsOpen { return .closeFolder }
+            return .dismiss
         }
         if modifiers.isCommandChord {
             return .ignored

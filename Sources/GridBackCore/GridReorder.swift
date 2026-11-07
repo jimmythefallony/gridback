@@ -54,16 +54,28 @@ public enum GridDragResolver {
 /// Nothing here talks to the pasteboard, so the Dock never sees the drag.
 public struct GridReorderSession: Equatable, Sendable {
     public let appID: String
+    public let original: Layout
+    public let startPage: Int
     public private(set) var preview: Layout
     public private(set) var page: Int
     private var edgeLatch: PageTurn?
 
     public init(appID: String, layout: Layout, page: Int) {
         self.appID = appID
+        self.original = layout
         self.preview = layout
         let last = max(layout.pages.count - 1, 0)
-        self.page = min(max(0, page), last)
+        let page = min(max(0, page), last)
+        self.startPage = page
+        self.page = page
         self.edgeLatch = nil
+    }
+
+    /// Puts the other icons back where the drag began. Used while a folder drop is armed.
+    public mutating func restoreOriginal() {
+        preview = original
+        page = startPage
+        edgeLatch = nil
     }
 
     /// `edge` wins over `slot` so the screen edge turns the page instead of

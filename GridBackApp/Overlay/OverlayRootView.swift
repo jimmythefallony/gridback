@@ -10,6 +10,11 @@ struct OverlayRootView: View {
     @State private var isSwiping = false
     @State private var suppressPageAnimation = false
     @State private var swipe = PageDragTracker()
+    @State private var hoverTarget: String?
+    @State private var hoverStarted: TimeInterval?
+    @State private var armedTarget: String?
+    @State private var dragLayout: LaunchGridLayout?
+    @StateObject private var armClock = ArmClock()
 
     var body: some View {
         GeometryReader { overlay in
@@ -26,7 +31,9 @@ struct OverlayRootView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if reorder == nil {
+                        if model.openFolderID != nil {
+                            model.closeFolder()
+                        } else if reorder == nil {
                             model.hideOverlay()
                         }
                     }
@@ -67,14 +74,14 @@ struct OverlayRootView: View {
                 }
 
                 if let reorder {
-                    AppIconButton(
-                        title: model.appsByID[reorder.appID]?.displayName ?? reorder.appID,
-                        image: model.iconImages[reorder.appID],
-                        iconSide: chrome.iconSide
-                    ) {}
-                    .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-                    .position(finger)
-                    .allowsHitTesting(false)
+                    draggedTile(reorder.appID, iconSide: chrome.iconSide)
+                        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+                        .position(finger)
+                        .allowsHitTesting(false)
+                }
+
+                if let folderID = model.openFolderID, let folder = model.layout.folder(folderID) {
+                    FolderCover(model: model, folder: folder, layout: chrome)
                 }
 
                 if let warning = model.persistenceWarning {
@@ -92,12 +99,16 @@ struct OverlayRootView: View {
             .coordinateSpace(name: "overlay")
             .simultaneousGesture(reorderGesture(layout: chrome))
             .background {
-                ScrollCatcher(isEnabled: reorder == nil && !model.isSearching) { event in
+                ScrollCatcher(isEnabled: reorder == nil && !model.isSearching && model.openFolderID == nil) { event in
                     handleScroll(event, pageWidth: chrome.pageWidth, pageCount: model.layout.pages.count)
                 }
             }
             .onAppear {
                 visualPage = CGFloat(model.currentPage)
+            }
+            .onChange(of: armClock.tick) { _, _ in
+                guard reorder != nil, let dragLayout else { return }
+                updateReorder(at: finger, layout: dragLayout)
             }
             .onChange(of: displayedPage) { _, newPage in
                 guard !isSwiping, !suppressPageAnimation else { return }
@@ -119,14 +130,15 @@ struct OverlayRootView: View {
         )
     }
 
-    private func pageStrip(pages: [[String]], layout: LaunchGridLayout) -> some View {
+    private func pageStrip(pages: [[GridBackCore.GridItem]], layout: LaunchGridLayout) -> some View {
         HStack(spacing: 0) {
             ForEach(pages.indices, id: \.self) { index in
                 AppGridView(
                     model: model,
                     layout: layout,
-                    ids: pages[index],
+                    items: pages[index],
                     hiddenID: reorder?.appID,
+                    armedID: armedTarget,
                     blockLaunch: blockLaunch
                 )
             }
@@ -139,7 +151,7 @@ struct OverlayRootView: View {
     private func reorderGesture(layout: LaunchGridLayout) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
-                guard !model.isSearching, !isSwiping else { return }
+                guard !model.isSearching, !isSwiping, model.openFolderID == nil else { return }
                 if reorder == nil {
                     guard let id = iconID(at: value.startLocation, layout: layout) else { return }
                     reorder = GridReorderSession(
@@ -147,16 +159,29 @@ struct OverlayRootView: View {
                         layout: model.layout,
                         page: model.currentPage
                     )
+                    hoverTarget = nil
+                    hoverStarted = nil
+                    armedTarget = nil
                     blockLaunch = true
+                    armClock.start()
                 }
+                dragLayout = layout
                 finger = value.location
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
+                armClock.stop()
                 if let reorder {
-                    model.commitReorder(reorder.preview, page: reorder.page)
+                    if let armedTarget {
+                        model.group(draggedAppID: reorder.appID, targetID: armedTarget)
+                    } else {
+                        model.commitReorder(reorder.preview, page: reorder.page)
+                    }
                 }
                 reorder = nil
+                hoverTarget = nil
+                hoverStarted = nil
+                armedTarget = nil
                 DispatchQueue.main.async {
                     blockLaunch = false
                 }
@@ -172,8 +197,38 @@ struct OverlayRootView: View {
             trailing: model.screenReserve.right
         )
         let slot = edge == nil ? layout.hitSlot(x: Double(point.x), y: Double(point.y)) : nil
-        session.hover(slot: slot, edge: edge)
+        let hovered = hoveredIcon(slot: slot, point: point, layout: layout, draggedID: session.appID)
+        let now = Date().timeIntervalSinceReferenceDate
+        if hovered != hoverTarget {
+            hoverTarget = hovered
+            hoverStarted = hovered == nil ? nil : now
+        }
+        let dwell = hoverStarted.map { now - $0 } ?? 0
+        let draggedIsFolder = model.layout.folder(session.appID) != nil
+        switch FolderDrop.decision(
+            draggedIsFolder: draggedIsFolder,
+            hoveredID: hovered,
+            pointerOverIconCenter: hovered != nil,
+            dwellSeconds: dwell
+        ) {
+        case .combine(let targetID):
+            armedTarget = targetID
+        case .reorder:
+            armedTarget = nil
+            session.hover(slot: slot, edge: edge)
+        }
         reorder = session
+    }
+
+    private func hoveredIcon(slot: Int?, point: CGPoint, layout: LaunchGridLayout, draggedID: String) -> String? {
+        guard let slot else { return nil }
+        guard layout.isOverIconCenter(x: Double(point.x), y: Double(point.y), slot: slot) else { return nil }
+        let pages = reorder?.preview.pages ?? model.layout.pages
+        let page = reorder?.page ?? model.currentPage
+        guard pages.indices.contains(page), slot < pages[page].count else { return nil }
+        let id = pages[page][slot].id
+        guard id != draggedID else { return nil }
+        return id
     }
 
     private func iconID(at point: CGPoint, layout: LaunchGridLayout) -> String? {
@@ -181,7 +236,7 @@ struct OverlayRootView: View {
         let pages = model.layout.pages
         let page = min(model.currentPage, max(pages.count - 1, 0))
         guard pages.indices.contains(page), slot < pages[page].count else { return nil }
-        return pages[page][slot]
+        return pages[page][slot].id
     }
 
     private func handleScroll(_ event: NSEvent, pageWidth: Double, pageCount: Int) -> Bool {
@@ -236,8 +291,29 @@ struct OverlayRootView: View {
         return false
     }
 
+    private func draggedTile(_ id: String, iconSide: CGFloat) -> some View {
+        if let folder = model.layout.folder(id) {
+            return AnyView(
+                FolderTile(
+                    name: folder.name,
+                    icons: folder.appIDs.prefix(9).map { model.iconImages[$0] },
+                    iconSide: iconSide,
+                    labelWidth: iconSide + 24,
+                    armed: false
+                ) {}
+            )
+        }
+        return AnyView(
+            AppIconButton(
+                title: model.appsByID[id]?.displayName ?? id,
+                image: model.iconImages[id],
+                iconSide: iconSide
+            ) {}
+        )
+    }
+
     private func turnToPage(_ page: Int) {
-        guard !model.layout.pages.isEmpty else { return }
+        guard model.openFolderID == nil, !model.layout.pages.isEmpty else { return }
         let clamped = min(max(page, 0), model.layout.pages.count - 1)
         isSwiping = false
         swipe.reset()
@@ -267,6 +343,88 @@ struct OverlayRootView: View {
             .padding(.vertical, 8)
             .background(color, in: Capsule())
             .shadow(radius: 8, y: 2)
+    }
+}
+
+private final class ArmClock: ObservableObject {
+    @Published private(set) var tick = 0
+    private var timer: Timer?
+
+    func start() {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.tick += 1
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
+private struct FolderCover: View {
+    @ObservedObject var model: GridBackModel
+    var folder: AppFolder
+    var layout: LaunchGridLayout
+    @State private var name: String = ""
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .onTapGesture { model.closeFolder() }
+            VStack(spacing: 18) {
+                TextField(AppFolder.defaultName, text: $name)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: 280)
+                    .focused($nameFocused)
+                    .onSubmit { commitName() }
+                    .onAppear { name = folder.name }
+                    .onDisappear { commitName() }
+                let columns = min(max(folder.appIDs.count, 1), 4)
+                LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
+                    ForEach(folder.appIDs, id: \.self) { id in
+                        AppIconButton(
+                            title: model.appsByID[id]?.displayName ?? id,
+                            image: model.iconImages[id],
+                            iconSide: layout.iconSide,
+                            labelWidth: layout.iconSide + 24
+                        ) {
+                            model.launch(id: id)
+                        }
+                        .gesture(ejectGesture(id))
+                    }
+                }
+            }
+            .padding(28)
+            .frame(minWidth: 280)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            }
+        }
+    }
+
+    private func ejectGesture(_ id: String) -> some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .named("overlay"))
+            .onEnded { value in
+                let travel = hypot(value.translation.width, value.translation.height)
+                guard travel > 48 else { return }
+                model.returnAppToGrid(id)
+            }
+    }
+
+    private func commitName() {
+        model.renameFolder(folder.id, to: name)
+        nameFocused = false
     }
 }
 

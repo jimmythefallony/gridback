@@ -59,7 +59,7 @@ struct AppIconButton: View {
 
 /// Draws no extra highlight of its own. The icon button paints only the
 /// shape around the icon and the label.
-private struct GridPlainButtonStyle: ButtonStyle {
+struct GridPlainButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
     }
