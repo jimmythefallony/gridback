@@ -13,6 +13,7 @@ struct OverlayRootView: View {
     @State private var hoverTarget: String?
     @State private var hoverStarted: TimeInterval?
     @State private var armedTarget: String?
+    @State private var highlightTarget: String?
     @State private var dragLayout: LaunchGridLayout?
     @StateObject private var armClock = ArmClock()
 
@@ -138,7 +139,7 @@ struct OverlayRootView: View {
                     layout: layout,
                     items: pages[index],
                     hiddenID: reorder?.appID,
-                    armedID: armedTarget,
+                    armedID: highlightTarget,
                     blockLaunch: blockLaunch
                 )
             }
@@ -162,6 +163,7 @@ struct OverlayRootView: View {
                     hoverTarget = nil
                     hoverStarted = nil
                     armedTarget = nil
+                    highlightTarget = nil
                     blockLaunch = true
                     armClock.start()
                 }
@@ -182,6 +184,7 @@ struct OverlayRootView: View {
                 hoverTarget = nil
                 hoverStarted = nil
                 armedTarget = nil
+                highlightTarget = nil
                 DispatchQueue.main.async {
                     blockLaunch = false
                 }
@@ -197,38 +200,49 @@ struct OverlayRootView: View {
             trailing: model.screenReserve.right
         )
         let slot = edge == nil ? layout.hitSlot(x: Double(point.x), y: Double(point.y)) : nil
-        let hovered = hoveredIcon(slot: slot, point: point, layout: layout, draggedID: session.appID)
+        let pageItems = session.preview.pages.indices.contains(session.page) ? session.preview.pages[session.page] : []
+        let occupant = slot.flatMap { slot -> String? in
+            guard pageItems.indices.contains(slot) else { return nil }
+            let id = pageItems[slot].id
+            return id == session.appID ? nil : id
+        }
         let now = Date().timeIntervalSinceReferenceDate
-        if hovered != hoverTarget {
-            hoverTarget = hovered
-            hoverStarted = hovered == nil ? nil : now
+        if occupant != hoverTarget {
+            hoverTarget = occupant
+            hoverStarted = occupant == nil ? nil : now
         }
         let dwell = hoverStarted.map { now - $0 } ?? 0
-        let draggedIsFolder = model.layout.folder(session.appID) != nil
-        switch FolderDrop.decision(
-            draggedIsFolder: draggedIsFolder,
-            hoveredID: hovered,
-            pointerOverIconCenter: hovered != nil,
-            dwellSeconds: dwell
-        ) {
-        case .combine(let targetID):
-            armedTarget = targetID
-        case .reorder:
+        let overCenter = slot.map { layout.isOverIconCenter(x: Double(point.x), y: Double(point.y), slot: $0) } ?? false
+        if edge != nil {
+            highlightTarget = nil
             armedTarget = nil
-            session.hover(slot: slot, edge: edge)
+            hoverTarget = nil
+            hoverStarted = nil
+            session.hover(slot: nil, edge: edge)
+        } else {
+            switch DragArbitration.resolve(
+                draggedID: session.appID,
+                draggedIsFolder: model.layout.folder(session.appID) != nil,
+                items: pageItems,
+                slot: slot,
+                overIconCenter: overCenter,
+                dwellSeconds: dwell
+            ) {
+            case .hold(let targetID, let armed):
+                highlightTarget = targetID
+                armedTarget = armed ? targetID : nil
+            case .reorder:
+                highlightTarget = nil
+                armedTarget = nil
+                let reorderSlot = slot ?? layout.insertionSlot(
+                    x: Double(point.x),
+                    y: Double(point.y),
+                    itemCount: pageItems.count
+                )
+                session.hover(slot: reorderSlot, edge: nil)
+            }
         }
         reorder = session
-    }
-
-    private func hoveredIcon(slot: Int?, point: CGPoint, layout: LaunchGridLayout, draggedID: String) -> String? {
-        guard let slot else { return nil }
-        guard layout.isOverIconCenter(x: Double(point.x), y: Double(point.y), slot: slot) else { return nil }
-        let pages = reorder?.preview.pages ?? model.layout.pages
-        let page = reorder?.page ?? model.currentPage
-        guard pages.indices.contains(page), slot < pages[page].count else { return nil }
-        let id = pages[page][slot].id
-        guard id != draggedID else { return nil }
-        return id
     }
 
     private func iconID(at point: CGPoint, layout: LaunchGridLayout) -> String? {

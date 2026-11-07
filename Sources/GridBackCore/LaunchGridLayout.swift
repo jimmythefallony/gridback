@@ -106,6 +106,20 @@ public struct LaunchGridLayout: Equatable, Sendable {
         return row * columns + column
     }
 
+    /// Where a drag should insert when it is in a gap rather than on an icon.
+    /// The index is clamped to `itemCount`, so it never points at a missing cell.
+    public func insertionSlot(x: Double, y: Double, itemCount: Int) -> Int? {
+        guard columnStride > 0, rowStride > 0, columns > 0, rows > 0 else { return nil }
+        let localX = x - originX
+        let localY = y - originY
+        guard localY >= 0, localY < gridHeight else { return nil }
+        guard localX >= 0, localX < gridWidth else { return nil }
+        let row = min(max(Int(localY / rowStride), 0), rows - 1)
+        let gap = Int((localX / columnStride).rounded())
+        let clampedGap = min(max(gap, 0), columns)
+        return min(max(row * columns + clampedGap, 0), max(itemCount, 0))
+    }
+
     /// The pointer is over the icon artwork, not the label or the gap around the cell.
     public func isOverIconCenter(x: Double, y: Double, slot: Int) -> Bool {
         guard slot >= 0, columns > 0 else { return false }
