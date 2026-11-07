@@ -58,6 +58,125 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(taken.orderedIDs.count, 3)
     }
 
+    func testEnteringANeighborDoesNotMoveItUntilTheHoldFinishes() {
+        let layout = Layout(pages: [["font", "image", "meter"]], metrics: GridMetrics(columns: 7, rows: 5))
+        var session = GridReorderSession(appID: "font", layout: layout, page: 0)
+        let items = session.preview.pages[0]
+        let entered = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: items,
+            slot: 1,
+            overIconCenter: true,
+            dwellSeconds: 0
+        )
+        XCTAssertEqual(entered, .hold(targetID: "image", armed: false))
+        apply(entered, to: &session)
+        XCTAssertEqual(session.preview.orderedIDs, ["font", "image", "meter"])
+
+        let still = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: session.preview.pages[0],
+            slot: 1,
+            overIconCenter: true,
+            dwellSeconds: 0.49
+        )
+        XCTAssertEqual(still, .hold(targetID: "image", armed: false))
+        apply(still, to: &session)
+        XCTAssertEqual(session.preview.orderedIDs, ["font", "image", "meter"])
+
+        let armed = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: session.preview.pages[0],
+            slot: 1,
+            overIconCenter: true,
+            dwellSeconds: 0.5
+        )
+        XCTAssertEqual(armed, .hold(targetID: "image", armed: true))
+        apply(armed, to: &session)
+        XCTAssertEqual(session.preview.orderedIDs, ["font", "image", "meter"])
+    }
+
+    func testLeavingTheIconBeforeTheHoldReordersInTheGap() {
+        let layout = Layout(pages: [["font", "image", "meter"]], metrics: GridMetrics(columns: 7, rows: 5))
+        var session = GridReorderSession(appID: "font", layout: layout, page: 0)
+        let cancelled = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: session.preview.pages[0],
+            slot: 1,
+            overIconCenter: true,
+            dwellSeconds: 0.2
+        )
+        XCTAssertEqual(cancelled, .hold(targetID: "image", armed: false))
+        apply(cancelled, to: &session)
+        XCTAssertEqual(session.preview.orderedIDs, ["font", "image", "meter"])
+
+        let gap = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: session.preview.pages[0],
+            slot: nil,
+            overIconCenter: false,
+            dwellSeconds: 0
+        )
+        XCTAssertEqual(gap, .reorder(slot: nil))
+        apply(.reorder(slot: 3), to: &session)
+        XCTAssertEqual(session.preview.orderedIDs, ["image", "meter", "font"])
+    }
+
+    func testDraggingAFolderStillReordersAndDoesNotNest() {
+        let layout = Layout(pages: [["font", "image"]], metrics: GridMetrics(columns: 7, rows: 5))
+        let resolution = DragArbitration.resolve(
+            draggedID: "folder.1",
+            draggedIsFolder: true,
+            items: [.folder("folder.1"), .app("image")],
+            slot: 1,
+            overIconCenter: true,
+            dwellSeconds: 2
+        )
+        XCTAssertEqual(resolution, .reorder(slot: 1))
+        XCTAssertEqual(
+            FolderDrop.decision(draggedIsFolder: true, hoveredID: "image", pointerOverIconCenter: true, dwellSeconds: 2),
+            .reorder
+        )
+        _ = layout
+    }
+
+    func testIconCenterOnARealGridStaysTheNeighborWhileTheGapDoesNot() {
+        let grid = LaunchGridLayout.make(overlayWidth: 1728, overlayHeight: 1117, columns: 7, rows: 5)
+        let imageSlot = 4
+        let centerX = grid.originX + grid.columnCenter(imageSlot)
+        let centerY = grid.originY + grid.rowCenter(imageSlot) - (grid.labelHeight + grid.iconLabelGap) / 2
+        XCTAssertEqual(grid.hitSlot(x: centerX, y: centerY), imageSlot)
+        XCTAssertTrue(grid.isOverIconCenter(x: centerX, y: centerY, slot: imageSlot))
+        let items: [GridItem] = ["a", "b", "c", "font", "image", "meter"]
+        let onIcon = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: items,
+            slot: grid.hitSlot(x: centerX, y: centerY),
+            overIconCenter: true,
+            dwellSeconds: 0
+        )
+        XCTAssertEqual(onIcon, .hold(targetID: "image", armed: false))
+
+        let gapX = grid.originX + grid.columnStride * 4
+        XCTAssertNil(grid.hitSlot(x: gapX, y: centerY))
+        let gap = DragArbitration.resolve(
+            draggedID: "font",
+            draggedIsFolder: false,
+            items: items,
+            slot: nil,
+            overIconCenter: false,
+            dwellSeconds: 0
+        )
+        XCTAssertEqual(gap, .reorder(slot: nil))
+        XCTAssertNotNil(grid.insertionSlot(x: gapX, y: centerY, itemCount: items.count))
+    }
+
     func testDraggingAFolderDoesNotNest() {
         XCTAssertEqual(
             FolderDrop.decision(draggedIsFolder: true, hoveredID: "a", pointerOverIconCenter: true, dwellSeconds: 2),
@@ -75,6 +194,12 @@ final class FolderTests: XCTestCase {
             FolderDrop.decision(draggedIsFolder: false, hoveredID: "a", pointerOverIconCenter: true, dwellSeconds: 0.5),
             .combine(targetID: "a")
         )
+    }
+
+    private func apply(_ resolution: DragResolution, to session: inout GridReorderSession) {
+        if case .reorder(let slot) = resolution {
+            session.hover(slot: slot, edge: nil)
+        }
     }
 
     func testRenameAndSearchOrderIncludeFolderApps() {

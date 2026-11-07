@@ -7,6 +7,33 @@ public enum FolderDropDecision: Equatable, Sendable {
     case combine(targetID: String)
 }
 
+/// What one drag sample should do. Hovering another icon never reorders:
+/// the target stays put so a folder hold can finish. Gaps and empty cells reorder.
+public enum DragResolution: Equatable, Sendable {
+    case reorder(slot: Int?)
+    case hold(targetID: String, armed: Bool)
+}
+
+public enum DragArbitration {
+    public static func resolve(
+        draggedID: String,
+        draggedIsFolder: Bool,
+        items: [GridItem],
+        slot: Int?,
+        overIconCenter: Bool,
+        dwellSeconds: Double
+    ) -> DragResolution {
+        if let slot, items.indices.contains(slot) {
+            let occupant = items[slot].id
+            if occupant != draggedID, !draggedIsFolder {
+                let armed = overIconCenter && dwellSeconds >= FolderDrop.dwell
+                return .hold(targetID: occupant, armed: armed)
+            }
+        }
+        return .reorder(slot: slot)
+    }
+}
+
 public enum FolderDrop {
     public static let dwell: Double = 0.5
 
