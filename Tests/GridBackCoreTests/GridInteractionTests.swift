@@ -231,6 +231,54 @@ final class MenuBarPresentationTests: XCTestCase {
     }
 }
 
+final class PicturePreparationTests: XCTestCase {
+    func testStaleRenderIsNotApplied() {
+        XCTAssertTrue(PictureApplyGate.shouldApply(
+            completedGeneration: 3,
+            completedCacheKey: "wall|3456x2234",
+            currentGeneration: 3,
+            currentCacheKey: "wall|3456x2234",
+            stillWanted: true
+        ))
+        XCTAssertFalse(PictureApplyGate.shouldApply(
+            completedGeneration: 3,
+            completedCacheKey: "wall|3456x2234",
+            currentGeneration: 4,
+            currentCacheKey: "wall|3456x2234",
+            stillWanted: true
+        ))
+        XCTAssertFalse(PictureApplyGate.shouldApply(
+            completedGeneration: 3,
+            completedCacheKey: "wall|3456x2234",
+            currentGeneration: 3,
+            currentCacheKey: "other|3456x2234",
+            stillWanted: true
+        ))
+        XCTAssertFalse(PictureApplyGate.shouldApply(
+            completedGeneration: 3,
+            completedCacheKey: "wall|3456x2234",
+            currentGeneration: 3,
+            currentCacheKey: "wall|3456x2234",
+            stillWanted: false
+        ))
+    }
+
+    func testPictureWorkLeavesTheMainThreadAndAppliesBackOnIt() {
+        let finished = expectation(description: "applied on main")
+        var workWasOnMain: Bool?
+        OffMainWork.start {
+            workWasOnMain = Thread.isMainThread
+            return "ready"
+        } apply: { value in
+            XCTAssertEqual(value, "ready")
+            XCTAssertEqual(workWasOnMain, false)
+            XCTAssertTrue(Thread.isMainThread)
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 2)
+    }
+}
+
 final class GridOverlayLayoutTests: XCTestCase {
     func testBottomDockWindowCoversTheMenuBarAndStopsAtTheDock() {
         let frames = GridOverlayFrames.make(

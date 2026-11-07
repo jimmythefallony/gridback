@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage
 import GridBackCore
+import ImageIO
 import os
 import SwiftUI
 
@@ -19,6 +20,11 @@ final class OverlayController: NSObject {
     private var activationObserver: NSObjectProtocol?
     private var dockWatch: Timer?
     private var appliedOcclusion: DockOcclusion?
+    /// True from show until hide, including the moment before the windows are ordered front.
+    private var wantsGrid = false
+    /// Wallpaper identity the visible grid is waiting on. A finished render for another key is dropped.
+    private var pictureKey: String?
+    private var inflightPictureKey: String?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
@@ -52,6 +58,9 @@ final class OverlayController: NSObject {
             log.error("Show skipped: no primary display")
             return
         }
+        wantsGrid = true
+        showGeneration += 1
+        let generation = showGeneration
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
         let backdrop = self.dockBackdrop ?? DockBackdropPanel(screen: screen)
@@ -61,38 +70,25 @@ final class OverlayController: NSObject {
         // Read the Dock band before activation. Activating can reveal the menu
         // bar and change the top inset; the Dock edge does not depend on that.
         let occlusion = DockClearanceReader.current(on: screen).occlusion
-        place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
+        layoutFrames(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
         model.updateScreenReserve(.none)
-        showGeneration += 1
-        let generation = showGeneration
         // The system launcher can open with us, or already be underneath.
         // Close it before we take the keyboard, and only once: the Dock
         // notification toggles, so a second send would open it again.
         didDismissSystemLauncher = false
         dismissSystemLauncherIfNeeded()
-        panel.alphaValue = 1
-        backdrop.alphaValue = 1
-        NSApp.unhide(nil)
-        backdrop.orderFrontRegardless()
-        panel.orderFrontRegardless()
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeKey()
-        // AppKit can drop a panel's level while ordering it.
-        panel.level = OverlayPanel.gridLevel
-        backdrop.level = DockBackdropPanel.backdropLevel
-        claimKeyboard()
         installEscapeMonitor()
         startDockWatch()
-        logDockBand(panel: panel, backdrop: backdrop, on: screen)
+        ensurePicture(generation: generation, on: screen)
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.showGeneration == generation, self.panel?.isVisible == true else { return }
+            guard let self, self.showGeneration == generation, self.wantsGrid else { return }
             self.claimKeyboard()
             if let screen = PrimaryDisplay.screen() {
                 self.relayout(on: screen)
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, self.showGeneration == generation, self.panel?.isVisible == true else { return }
+            guard let self, self.showGeneration == generation, self.wantsGrid else { return }
             self.dismissSystemLauncherIfNeeded()
             self.claimKeyboard()
             if let screen = PrimaryDisplay.screen() {
@@ -102,11 +98,14 @@ final class OverlayController: NSObject {
     }
 
     func hide() {
+        wantsGrid = false
         removeEscapeMonitor()
         // If the system launcher is still underneath, close it with us so a
         // background click does not dismiss into Launchpad.
         dismissSystemLauncherIfNeeded()
         showGeneration += 1
+        pictureKey = nil
+        inflightPictureKey = nil
         stopDockWatch()
         dockBackdrop?.orderOut(nil)
         panel?.orderOut(nil)
@@ -130,7 +129,7 @@ final class OverlayController: NSObject {
     }
 
     private func refreshDockBandIfNeeded() {
-        guard panel?.isVisible == true, let screen = PrimaryDisplay.screen() else { return }
+        guard wantsGrid, let screen = PrimaryDisplay.screen() else { return }
         let occlusion = DockClearanceReader.current(on: screen).occlusion
         guard occlusion != appliedOcclusion else { return }
         relayout(on: screen)
@@ -156,7 +155,7 @@ final class OverlayController: NSObject {
     }
 
     private func otherApplicationDidActivate(_ notification: Notification) {
-        guard panel?.isVisible == true, let model else { return }
+        guard wantsGrid, let model else { return }
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
             return
         }
@@ -184,7 +183,7 @@ final class OverlayController: NSObject {
                 return
             }
             DispatchQueue.main.async {
-                guard self?.panel?.isVisible == true else { return }
+                guard self?.wantsGrid == true else { return }
                 self?.model?.hideOverlay()
             }
         }
@@ -206,7 +205,7 @@ final class OverlayController: NSObject {
     }
 
     private func relayoutIfVisible() {
-        guard panel?.isVisible == true, let screen = PrimaryDisplay.screen() else { return }
+        guard wantsGrid, let screen = PrimaryDisplay.screen() else { return }
         relayout(on: screen)
     }
 
@@ -215,13 +214,14 @@ final class OverlayController: NSObject {
         let backdrop = dockBackdrop ?? DockBackdropPanel(screen: screen)
         dockBackdrop = backdrop
         let occlusion = DockClearanceReader.current(on: screen).occlusion
-        place(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
+        layoutFrames(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
         model.updateScreenReserve(.none)
         panel.level = OverlayPanel.gridLevel
         backdrop.level = DockBackdropPanel.backdropLevel
+        ensurePicture(generation: showGeneration, on: screen)
     }
 
-    private func place(panel: OverlayPanel, backdrop: DockBackdropPanel, on screen: NSScreen, occlusion: DockOcclusion) {
+    private func layoutFrames(panel: OverlayPanel, backdrop: DockBackdropPanel, on screen: NSScreen, occlusion: DockOcclusion) {
         let screenFrame = screen.frame
         let frames = GridOverlayFrames.make(
             screenX: Double(screenFrame.origin.x),
@@ -230,28 +230,109 @@ final class OverlayController: NSObject {
             screenHeight: Double(screenFrame.size.height),
             occlusion: occlusion
         )
-        let gridRect = NSRect(x: frames.grid.x, y: frames.grid.y, width: frames.grid.width, height: frames.grid.height)
-        let backdropRect = NSRect(x: frames.backdrop.x, y: frames.backdrop.y, width: frames.backdrop.width, height: frames.backdrop.height)
-        panel.setFrame(gridRect, display: false)
-        backdrop.setFrame(backdropRect, display: false)
-        let picture = DesktopPicture.image(on: screen)
-        let gridPlacement = BackdropImagePlacement.inWindow(screen: frames.backdrop, window: frames.grid)
-        let fullPlacement = BackdropImagePlacement.inWindow(screen: frames.backdrop, window: frames.backdrop)
+        panel.setFrame(
+            NSRect(x: frames.grid.x, y: frames.grid.y, width: frames.grid.width, height: frames.grid.height),
+            display: false
+        )
+        backdrop.setFrame(
+            NSRect(x: frames.backdrop.x, y: frames.backdrop.y, width: frames.backdrop.width, height: frames.backdrop.height),
+            display: false
+        )
+        appliedOcclusion = occlusion
+    }
+
+    /// Shows the shared blurred picture. A cached picture is applied immediately.
+    /// A miss is rendered off the main thread, and the windows stay hidden until it arrives
+    /// so the sharp wallpaper never flashes.
+    private func ensurePicture(generation: Int, on screen: NSScreen) {
+        guard let job = DesktopPicture.job(on: screen) else {
+            log.error("DesktopPicture skipped: no desktop image URL")
+            return
+        }
+        pictureKey = job.cacheKey
+        if let image = DesktopPicture.cached(job.cacheKey) {
+            applyPicture(image, job: job)
+            revealGrid()
+            return
+        }
+        guard inflightPictureKey != job.cacheKey else { return }
+        inflightPictureKey = job.cacheKey
+        let key = job.cacheKey
+        log.info("DesktopPicture schedule main=\(Thread.isMainThread, privacy: .public) key=\(key, privacy: .public)")
+        OffMainWork.start {
+            let onMain = Thread.isMainThread
+            let qos = Int(qos_class_self().rawValue)
+            let image = DesktopPicture.render(job)
+            return (onMain, qos, image)
+        } apply: { [weak self] result in
+            guard let self else { return }
+            if self.inflightPictureKey == key, self.showGeneration == generation {
+                self.inflightPictureKey = nil
+            }
+            let (renderedOnMain, qos, cgImage) = result
+            self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
+            guard PictureApplyGate.shouldApply(
+                completedGeneration: generation,
+                completedCacheKey: key,
+                currentGeneration: self.showGeneration,
+                currentCacheKey: self.pictureKey ?? "",
+                stillWanted: self.wantsGrid
+            ) else {
+                self.log.info("DesktopPicture drop stale generation=\(generation, privacy: .public) key=\(key, privacy: .public)")
+                return
+            }
+            guard let cgImage else {
+                self.log.error("DesktopPicture render failed")
+                return
+            }
+            let image = NSImage(cgImage: cgImage, size: job.pointSize)
+            DesktopPicture.store(image, key: key)
+            self.applyPicture(image, job: job)
+            self.revealGrid()
+        }
+    }
+
+    private func applyPicture(_ image: NSImage, job: DesktopPictureJob) {
+        guard let panel, let backdrop = dockBackdrop else { return }
+        let screenRect = PlacedRect(x: job.screenX, y: job.screenY, width: job.screenWidth, height: job.screenHeight)
+        let gridRect = PlacedRect(x: panel.frame.minX, y: panel.frame.minY, width: panel.frame.width, height: panel.frame.height)
+        let backdropRect = PlacedRect(x: backdrop.frame.minX, y: backdrop.frame.minY, width: backdrop.frame.width, height: backdrop.frame.height)
+        let gridPlacement = BackdropImagePlacement.inWindow(screen: screenRect, window: gridRect)
+        let fullPlacement = BackdropImagePlacement.inWindow(screen: screenRect, window: backdropRect)
         BackdropSurface.show(
-            image: picture,
+            image: image,
             placement: NSRect(x: gridPlacement.x, y: gridPlacement.y, width: gridPlacement.width, height: gridPlacement.height),
             imageView: panel.backdropView,
             fallback: panel.fallbackBlur,
             window: panel
         )
         BackdropSurface.show(
-            image: picture,
+            image: image,
             placement: NSRect(x: fullPlacement.x, y: fullPlacement.y, width: fullPlacement.width, height: fullPlacement.height),
             imageView: backdrop.backdropView,
             fallback: backdrop.fallbackBlur,
             window: backdrop
         )
-        appliedOcclusion = occlusion
+    }
+
+    private func revealGrid() {
+        guard wantsGrid, let panel, let backdrop = dockBackdrop else { return }
+        panel.level = OverlayPanel.gridLevel
+        backdrop.level = DockBackdropPanel.backdropLevel
+        guard !panel.isVisible else { return }
+        panel.alphaValue = 1
+        backdrop.alphaValue = 1
+        NSApp.unhide(nil)
+        backdrop.orderFrontRegardless()
+        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeKey()
+        panel.level = OverlayPanel.gridLevel
+        backdrop.level = DockBackdropPanel.backdropLevel
+        claimKeyboard()
+        if let screen = PrimaryDisplay.screen() {
+            logDockBand(panel: panel, backdrop: backdrop, on: screen)
+        }
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
@@ -318,33 +399,59 @@ enum SystemLauncherProbe {
     }
 }
 
+struct DesktopPictureJob {
+    var cacheKey: String
+    var url: URL
+    var pointSize: NSSize
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var screenX: Double
+    var screenY: Double
+    var screenWidth: Double
+    var screenHeight: Double
+}
+
 enum DesktopPicture {
     private static var cacheKey: String?
     private static var cache: NSImage?
 
-    /// One blurred desktop picture at the screen's pixel size. Both windows
-    /// display this image; neither applies a material on top of it.
-    static func image(on screen: NSScreen) -> NSImage? {
+    static func job(on screen: NSScreen) -> DesktopPictureJob? {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
         let scale = max(screen.backingScaleFactor, 1)
         let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
         let pixelH = max(1, Int((screen.frame.height * scale).rounded()))
-        let key = "\(url.path)|\(pixelW)x\(pixelH)"
-        if key == cacheKey, let cache { return cache }
-        guard let rendered = render(url: url, pointSize: screen.frame.size, pixelWidth: pixelW, pixelHeight: pixelH) else { return nil }
-        cacheKey = key
-        cache = rendered
-        return rendered
+        return DesktopPictureJob(
+            cacheKey: "\(url.path)|\(pixelW)x\(pixelH)",
+            url: url,
+            pointSize: screen.frame.size,
+            pixelWidth: pixelW,
+            pixelHeight: pixelH,
+            screenX: Double(screen.frame.origin.x),
+            screenY: Double(screen.frame.origin.y),
+            screenWidth: Double(screen.frame.size.width),
+            screenHeight: Double(screen.frame.size.height)
+        )
     }
 
-    private static func render(url: URL, pointSize: NSSize, pixelWidth: Int, pixelHeight: Int) -> NSImage? {
-        guard let source = NSImage(contentsOf: url) else { return nil }
-        var proposed = NSRect(origin: .zero, size: source.size)
-        guard let wallpaper = source.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else { return nil }
-        let pixelW = CGFloat(pixelWidth)
-        let pixelH = CGFloat(pixelHeight)
+    static func cached(_ key: String) -> NSImage? {
+        key == cacheKey ? cache : nil
+    }
+
+    static func store(_ image: NSImage, key: String) {
+        cacheKey = key
+        cache = image
+    }
+
+    /// Blurs the desktop picture. Call this off the main thread.
+    static func render(_ job: DesktopPictureJob) -> CGImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(job.url as CFURL, sourceOptions),
+              let wallpaper = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let pixelW = CGFloat(job.pixelWidth)
+        let pixelH = CGFloat(job.pixelHeight)
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
+        guard srcW > 0, srcH > 0 else { return nil }
         let fit = max(pixelW / srcW, pixelH / srcH)
         let placed = CIImage(cgImage: wallpaper)
             .transformed(by: CGAffineTransform(scaleX: fit, y: fit))
@@ -353,13 +460,12 @@ enum DesktopPicture {
                 y: (pixelH - srcH * fit) / 2
             ))
         let extent = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
-        let scale = pixelH / max(pointSize.height, 1)
+        let scale = pixelH / max(job.pointSize.height, 1)
         let radius = 52 * Double(scale)
         let blurred = placed.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
             .cropped(to: extent)
-        guard let fullImage = CIContext().createCGImage(blurred, from: extent) else { return nil }
-        return NSImage(cgImage: fullImage, size: pointSize)
+        return CIContext().createCGImage(blurred, from: extent)
     }
 }
 
