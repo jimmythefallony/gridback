@@ -23,7 +23,6 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var launchError: String?
     @Published private(set) var shortcut: ShortcutChord
     @Published var heldDrag = HeldDrag()
-    private var escapePump: Timer?
     @Published private(set) var hotkeyFailure: String?
     @Published private(set) var persistenceWarning: String?
     @Published private(set) var isRecordingShortcut = false
@@ -157,7 +156,6 @@ final class GridBackModel: ObservableObject {
         heldDrag = drag
         switch command {
         case .cancelDrag(let cancellation):
-            stopEscapePump()
             if cancellation.closeTransientFolder {
                 closeFolder()
             }
@@ -171,14 +169,12 @@ final class GridBackModel: ObservableObject {
         var drag = heldDrag
         drag.beginGrid(appID: appID, origin: layout)
         heldDrag = drag
-        startEscapePump()
     }
 
     func beginHeldFolderDrag(appID: String, folderID: String) {
         var drag = heldDrag
         drag.pickInsideFolder(appID: appID, folderID: folderID, origin: layout)
         heldDrag = drag
-        startEscapePump()
     }
 
     func noteHeldExtracted() {
@@ -200,53 +196,10 @@ final class GridBackModel: ObservableObject {
     }
 
     func completeHeldDrag() -> HeldDrag.Outcome {
-        stopEscapePump()
         var drag = heldDrag
         let outcome = drag.complete()
         heldDrag = drag
         return outcome
-    }
-
-    /// While a drag is tracking, SwiftUI only pulls mouse events, so the normal
-    /// key monitor never sees Escape. This timer runs in the tracking run loop
-    /// and takes a queued Escape before the mouse-up can save the drag.
-    private func startEscapePump() {
-        guard escapePump == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            self?.pullQueuedEscape()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        escapePump = timer
-    }
-
-    private func stopEscapePump() {
-        escapePump?.invalidate()
-        escapePump = nil
-    }
-
-    private func pullQueuedEscape() {
-        guard heldDrag.isActive else {
-            stopEscapePump()
-            return
-        }
-        let modes: [RunLoop.Mode] = [.eventTracking, .default, .modalPanel, .common]
-        for mode in modes {
-            guard let waiting = NSApp.nextEvent(matching: .keyDown, until: .distantPast, inMode: mode, dequeue: false),
-                  waiting.keyCode == SearchKeyRouting.escapeKeyCode else {
-                continue
-            }
-            let modifiers = KeyModifiers(eventFlags: waiting.modifierFlags)
-            guard !modifiers.isCommandChord else { continue }
-            guard let event = NSApp.nextEvent(matching: .keyDown, until: .distantPast, inMode: mode, dequeue: true) else {
-                return
-            }
-            _ = handleKeyDown(
-                keyCode: event.keyCode,
-                characters: event.characters ?? "",
-                modifiers: KeyModifiers(eventFlags: event.modifierFlags)
-            )
-            return
-        }
     }
 
     private func apply(_ action: SearchKeyAction) -> Bool {
