@@ -412,30 +412,31 @@ final class FolderTests: XCTestCase {
 
     func testHoldingOpenCancelsWhenTheTargetChanges() {
         var watch = FolderHoldOpen.Watch()
+        XCTAssertEqual(FolderHoldOpen.duration, 1)
         XCTAssertEqual(watch.sample(now: 0, targetID: "folder.a", targetIsExistingFolder: true), .waiting(targetID: "folder.a", elapsed: 0))
         XCTAssertEqual(
-            watch.sample(now: 1, targetID: "folder.a", targetIsExistingFolder: true),
-            .waiting(targetID: "folder.a", elapsed: 1)
+            watch.sample(now: 0.5, targetID: "folder.a", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.a", elapsed: 0.5)
         )
         XCTAssertEqual(
-            watch.sample(now: 1, targetID: "folder.b", targetIsExistingFolder: true),
+            watch.sample(now: 0.5, targetID: "folder.b", targetIsExistingFolder: true),
             .waiting(targetID: "folder.b", elapsed: 0)
         )
-        if case .open(let id) = watch.sample(now: 2, targetID: "folder.b", targetIsExistingFolder: true) {
-            XCTFail("opened \(id) before the new folder had been held for two seconds")
+        if case .open(let id) = watch.sample(now: 1, targetID: "folder.b", targetIsExistingFolder: true) {
+            XCTFail("opened \(id) before the new folder had been held for one second")
         }
-        XCTAssertEqual(watch.sample(now: 2, targetID: nil, targetIsExistingFolder: false), .cancelled)
+        XCTAssertEqual(watch.sample(now: 1, targetID: nil, targetIsExistingFolder: false), .cancelled)
         XCTAssertEqual(
-            watch.sample(now: 3, targetID: "folder.a", targetIsExistingFolder: true),
+            watch.sample(now: 2, targetID: "folder.a", targetIsExistingFolder: true),
             .waiting(targetID: "folder.a", elapsed: 0)
         )
         XCTAssertEqual(
-            watch.sample(now: 5, targetID: "folder.a", targetIsExistingFolder: true),
+            watch.sample(now: 3, targetID: "folder.a", targetIsExistingFolder: true),
             .open(targetID: "folder.a")
         )
         XCTAssertEqual(
-            watch.sample(now: 6, targetID: "folder.a", targetIsExistingFolder: true),
-            .waiting(targetID: "folder.a", elapsed: 3)
+            watch.sample(now: 4, targetID: "folder.a", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.a", elapsed: 2)
         )
         XCTAssertEqual(watch.sample(now: 3, targetID: "app", targetIsExistingFolder: false), .cancelled)
     }
@@ -474,6 +475,57 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 10, localY: 20, slotCount: 4, open: metrics), 0)
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 60, localY: 20, slotCount: 4, open: metrics), 1)
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 250, localY: 20, slotCount: 4, open: metrics), 3)
+    }
+
+    func testHoverOpenStaysUntilThePointerLeavesBothTheTileAndThePanel() {
+        let tileMin = 360.0
+        let tileMax = 440.0
+        let panelMinX = 450.0
+        let panelMaxX = 1150.0
+        let panelMinY = 300.0
+        let panelMaxY = 500.0
+        let onTile = FolderInsertionGate.shouldClose(
+            x: 400, y: 500,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY,
+            anchorMinX: tileMin, anchorMinY: 460, anchorMaxX: tileMax, anchorMaxY: 540
+        )
+        let inPanel = FolderInsertionGate.shouldClose(
+            x: 800, y: 400,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY,
+            anchorMinX: tileMin, anchorMinY: 460, anchorMaxX: tileMax, anchorMaxY: 540
+        )
+        let beforeFrame = FolderInsertionGate.shouldClose(
+            x: 200, y: 500,
+            panelReady: false,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY,
+            anchorMinX: tileMin, anchorMinY: 460, anchorMaxX: tileMax, anchorMaxY: 540
+        )
+        let leftBoth = FolderInsertionGate.shouldClose(
+            x: 200, y: 500,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY,
+            anchorMinX: tileMin, anchorMinY: 460, anchorMaxX: tileMax, anchorMaxY: 540
+        )
+        XCTAssertFalse(onTile)
+        XCTAssertFalse(inPanel)
+        XCTAssertFalse(beforeFrame)
+        XCTAssertTrue(leftBoth)
+
+        let created = FolderEditing.group(
+            layout: Layout(pages: [["a", "b", "c", "d"]], metrics: twoByTwo),
+            draggedAppID: "b",
+            targetID: "a"
+        )
+        let folderID = created.folders[0].id
+        let stayed = created
+        XCTAssertEqual(stayed.folders[0].appIDs, ["a", "b"])
+        XCTAssertEqual(stayed.orderedIDs.filter { $0 == "d" }.count, 1)
+        let dropped = FolderEditing.insertApp(layout: created, appID: "d", folderID: folderID, at: 1)
+        XCTAssertEqual(dropped.folders[0].appIDs, ["a", "d", "b"])
+        XCTAssertEqual(dropped.orderedIDs.filter { $0 == "d" }.count, 1)
+        XCTAssertFalse(dropped.pages.flatMap { $0.map(\.id) }.contains("d"))
     }
 
     func testEscapeCancelsTheDragBeforeItChangesTheFolderOrTheGrid() {

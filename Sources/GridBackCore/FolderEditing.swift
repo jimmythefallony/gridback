@@ -228,7 +228,7 @@ public enum FolderPanelMetrics {
 }
 
 public enum FolderHoldOpen {
-    public static let duration: Double = 2
+    public static let duration: Double = 1
 
     public enum Decision: Equatable, Sendable {
         case idle
@@ -432,6 +432,36 @@ public enum FolderPanelExit {
         hysteresis: Double = hysteresis
     ) -> Bool {
         x < minX - hysteresis || x > maxX + hysteresis || y < minY - hysteresis || y > maxY + hysteresis
+    }
+}
+
+public enum FolderInsertionGate {
+    /// The folder opens while the pointer is still on the grid tile. The panel then moves
+    /// to the middle, so that tile is outside the panel. Staying there is not leaving.
+    /// Close only after the pointer is outside the panel and outside that tile.
+    public static func shouldClose(
+        x: Double,
+        y: Double,
+        panelReady: Bool,
+        panelMinX: Double,
+        panelMinY: Double,
+        panelMaxX: Double,
+        panelMaxY: Double,
+        anchorMinX: Double,
+        anchorMinY: Double,
+        anchorMaxX: Double,
+        anchorMaxY: Double
+    ) -> Bool {
+        guard panelReady else { return false }
+        let outsidePanel = FolderPanelExit.hasLeft(
+            x: x, y: y,
+            minX: panelMinX, minY: panelMinY, maxX: panelMaxX, maxY: panelMaxY
+        )
+        let outsideTile = FolderPanelExit.hasLeft(
+            x: x, y: y,
+            minX: anchorMinX, minY: anchorMinY, maxX: anchorMaxX, maxY: anchorMaxY
+        )
+        return outsidePanel && outsideTile
     }
 }
 

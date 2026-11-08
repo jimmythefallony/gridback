@@ -26,6 +26,7 @@ struct OverlayRootView: View {
     @State private var holdOpen = FolderHoldOpen.Watch()
     @State private var insertingIntoFolder: String?
     @State private var insertIndex = 0
+    @State private var insertionAnchor = CGRect.null
     @State private var holdOpenSuspended = false
     @State private var holdDismiss = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -351,6 +352,7 @@ struct OverlayRootView: View {
                 session.restoreOriginal()
                 insertingIntoFolder = folderID
                 insertIndex = 0
+                insertionAnchor = tileAnchor(folderID, layout: layout)
                 armedTarget = nil
                 highlightTarget = nil
                 holdDismiss = false
@@ -365,13 +367,18 @@ struct OverlayRootView: View {
         guard let folderID = insertingIntoFolder,
               let folder = model.layout.folder(folderID),
               let appID = reorder?.appID else { return }
-        if folderPanel != .zero && FolderPanelExit.hasLeft(
+        if FolderInsertionGate.shouldClose(
             x: Double(point.x),
             y: Double(point.y),
-            minX: Double(folderPanel.minX),
-            minY: Double(folderPanel.minY),
-            maxX: Double(folderPanel.maxX),
-            maxY: Double(folderPanel.maxY)
+            panelReady: folderPanel != .zero,
+            panelMinX: Double(folderPanel.minX),
+            panelMinY: Double(folderPanel.minY),
+            panelMaxX: Double(folderPanel.maxX),
+            panelMaxY: Double(folderPanel.maxY),
+            anchorMinX: Double(insertionAnchor.minX),
+            anchorMinY: Double(insertionAnchor.minY),
+            anchorMaxX: Double(insertionAnchor.maxX),
+            anchorMaxY: Double(insertionAnchor.maxY)
         ) {
             exitHoldOpen(at: point, layout: layout)
             return
@@ -390,6 +397,7 @@ struct OverlayRootView: View {
 
     private func exitHoldOpen(at point: CGPoint, layout: LaunchGridLayout) {
         insertingIntoFolder = nil
+        insertionAnchor = .null
         holdOpen.reset()
         hoverTarget = nil
         hoverStarted = nil
@@ -581,6 +589,12 @@ struct OverlayRootView: View {
         DispatchQueue.main.async {
             blockLaunch = false
         }
+    }
+
+    private func tileAnchor(_ id: String, layout: LaunchGridLayout) -> CGRect {
+        let center = folderTileCenter(id, layout: layout, overlaySize: CGSize(width: layout.pageWidth, height: layout.gridHeight))
+        let side = layout.iconSide
+        return CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
     }
 
     private func folderTileCenter(_ id: String, layout: LaunchGridLayout, overlaySize: CGSize) -> CGPoint {
