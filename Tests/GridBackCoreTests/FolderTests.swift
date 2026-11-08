@@ -258,15 +258,64 @@ final class FolderTests: XCTestCase {
     }
 
     func testFolderShapeWidensFromTheSquareTileAndKeepsSideMargins() {
-        let wide = FolderPanelMetrics.openMetrics(overlayWidth: 1728, preferredIcon: 112, appCount: 2)
-        XCTAssertLessThanOrEqual(wide.width, FolderPanelMetrics.maxWidth)
-        XCTAssertGreaterThanOrEqual(wide.sideMargin, 1728 * FolderPanelMetrics.sideMarginFraction - 0.1)
-        XCTAssertEqual(wide.sideMargin, (1728 - wide.width) / 2, accuracy: 0.001)
-        XCTAssertGreaterThan(wide.width, wide.height)
+        let wide = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 800,
+            appCount: 2
+        )
+        XCTAssertEqual(wide.width, 700, accuracy: 0.001)
+        XCTAssertEqual(wide.iconSide, 64, accuracy: 0.001)
+        XCTAssertEqual(wide.columnStride, 100, accuracy: 0.001)
+        XCTAssertEqual(wide.rows, 1)
+        XCTAssertEqual(wide.height, 16 * 2 + 120, accuracy: 0.001)
+        XCTAssertGreaterThan(wide.width, 460)
+        XCTAssertEqual(wide.sideMargin, (1728 - 700) / 2, accuracy: 0.001)
 
-        let narrow = FolderPanelMetrics.openMetrics(overlayWidth: 640, preferredIcon: 96, appCount: 4)
-        XCTAssertLessThanOrEqual(narrow.width, 640 * (1 - FolderPanelMetrics.sideMarginFraction * 2) + 0.1)
-        XCTAssertGreaterThanOrEqual(narrow.sideMargin, 640 * FolderPanelMetrics.sideMarginFraction - 0.1)
+        let twoRows = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 800,
+            appCount: 8
+        )
+        XCTAssertEqual(twoRows.rows, 2)
+        XCTAssertEqual(twoRows.height, wide.height + 120, accuracy: 0.001)
+        XCTAssertEqual(twoRows.iconSide, wide.iconSide, accuracy: 0.001)
+
+        let squeezed = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 300,
+            appCount: 40
+        )
+        XCTAssertLessThanOrEqual(squeezed.height, 300)
+        XCTAssertLessThan(squeezed.iconSide, 64)
+        XCTAssertEqual(squeezed.rows, 6)
+
+        let narrowOverlay = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 640,
+            availableHeight: 800,
+            appCount: 4
+        )
+        XCTAssertEqual(narrowOverlay.width, 608, accuracy: 0.001)
+        XCTAssertEqual(narrowOverlay.sideMargin, 16, accuracy: 0.001)
 
         let tileSide = 80.0
         let closed = FolderPanelMetrics.shape(
@@ -359,5 +408,71 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(loaded.layout.orderedIDs, atEnd.orderedIDs)
         XCTAssertEqual(loaded.layout.folders[0].appIDs, ["a"])
         XCTAssertEqual(loaded.layout.pages[0].map(\.id).last, "b")
+    }
+
+    func testHoldingOpenCancelsWhenTheTargetChanges() {
+        var watch = FolderHoldOpen.Watch()
+        XCTAssertEqual(watch.sample(now: 0, targetID: "folder.a", targetIsExistingFolder: true), .waiting(targetID: "folder.a", elapsed: 0))
+        XCTAssertEqual(
+            watch.sample(now: 1, targetID: "folder.a", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.a", elapsed: 1)
+        )
+        XCTAssertEqual(
+            watch.sample(now: 1, targetID: "folder.b", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.b", elapsed: 0)
+        )
+        if case .open(let id) = watch.sample(now: 2, targetID: "folder.b", targetIsExistingFolder: true) {
+            XCTFail("opened \(id) before the new folder had been held for two seconds")
+        }
+        XCTAssertEqual(watch.sample(now: 2, targetID: nil, targetIsExistingFolder: false), .cancelled)
+        XCTAssertEqual(
+            watch.sample(now: 3, targetID: "folder.a", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.a", elapsed: 0)
+        )
+        XCTAssertEqual(
+            watch.sample(now: 5, targetID: "folder.a", targetIsExistingFolder: true),
+            .open(targetID: "folder.a")
+        )
+        XCTAssertEqual(
+            watch.sample(now: 6, targetID: "folder.a", targetIsExistingFolder: true),
+            .waiting(targetID: "folder.a", elapsed: 3)
+        )
+        XCTAssertEqual(watch.sample(now: 3, targetID: "app", targetIsExistingFolder: false), .cancelled)
+    }
+
+    func testChosenFolderInsertionReordersAndACancelDoesNotSave() {
+        let created = FolderEditing.group(
+            layout: Layout(pages: [["a", "b", "c", "d"]], metrics: twoByTwo),
+            draggedAppID: "b",
+            targetID: "a"
+        )
+        let folderID = created.folders[0].id
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+        XCTAssertEqual(FolderEditing.previewOrder(existing: ["a", "b"], appID: "d", index: 0), ["d", "a", "b"])
+        XCTAssertEqual(FolderEditing.previewOrder(existing: ["a", "b"], appID: "d", index: 1), ["a", "d", "b"])
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+
+        let atFront = FolderEditing.insertApp(layout: created, appID: "d", folderID: folderID, at: 0)
+        let atEnd = FolderEditing.insertApp(layout: created, appID: "d", folderID: folderID, at: 9)
+        XCTAssertEqual(atFront.folders[0].appIDs, ["d", "a", "b"])
+        XCTAssertEqual(atEnd.folders[0].appIDs, ["a", "b", "d"])
+        XCTAssertEqual(atFront.orderedIDs.filter { $0 == "d" }.count, 1)
+        XCTAssertFalse(atFront.pages.flatMap { $0.map(\.id) }.contains("d"))
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+        XCTAssertTrue(created.orderedIDs.contains("d"))
+
+        let metrics = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 800,
+            appCount: 4
+        )
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 10, localY: 20, slotCount: 4, open: metrics), 0)
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 60, localY: 20, slotCount: 4, open: metrics), 1)
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 250, localY: 20, slotCount: 4, open: metrics), 3)
     }
 }

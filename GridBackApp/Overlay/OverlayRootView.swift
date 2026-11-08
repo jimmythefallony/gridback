@@ -23,6 +23,11 @@ struct OverlayRootView: View {
     @State private var folderPanel = CGRect.zero
     @State private var folderIconFrames: [String: CGRect] = [:]
     @State private var gridChromeVisible = true
+    @State private var holdOpen = FolderHoldOpen.Watch()
+    @State private var insertingIntoFolder: String?
+    @State private var insertIndex = 0
+    @State private var holdOpenSuspended = false
+    @State private var holdDismiss = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -89,15 +94,19 @@ struct OverlayRootView: View {
                     FolderCover(
                         model: model,
                         folder: folder,
+                        arrangedIDs: arrangedFolderIDs(folder),
                         layout: chrome,
                         tileCenter: folderTileCenter(folderID, layout: chrome, overlaySize: overlay.size),
+                        restCenterX: chrome.contentCenterX,
                         reduceMotion: reduceMotion,
                         collapse: folderHandoff,
+                        holdDismiss: holdDismiss,
+                        passesDragThrough: insertingIntoFolder != nil,
                         suppressLaunch: blockLaunch,
                         gridChromeVisible: $gridChromeVisible,
                         iconFrames: $folderIconFrames,
                         panelFrame: $folderPanel,
-                        hiddenID: folderDragID
+                        hiddenID: folderDragID ?? (insertingIntoFolder == folderID ? reorder?.appID : nil)
                     )
                 }
 
@@ -131,7 +140,7 @@ struct OverlayRootView: View {
                 visualPage = CGFloat(model.currentPage)
             }
             .onChange(of: armClock.tick) { _, _ in
-                guard reorder != nil, let dragLayout else { return }
+                guard reorder != nil, insertingIntoFolder == nil, let dragLayout else { return }
                 updateReorder(at: finger, layout: dragLayout)
             }
             .onChange(of: displayedPage) { _, newPage in
@@ -143,6 +152,8 @@ struct OverlayRootView: View {
             .onChange(of: model.openFolderID) { _, id in
                 if id == nil {
                     gridChromeVisible = true
+                    holdOpenSuspended = false
+                    holdDismiss = false
                 }
             }
         }
@@ -181,13 +192,19 @@ struct OverlayRootView: View {
     private func reorderGesture(layout: LaunchGridLayout) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
+                if insertingIntoFolder != nil {
+                    finger = value.location
+                    dragLayout = layout
+                    trackInsertion(at: value.location, layout: layout)
+                    return
+                }
                 if folderHandoff {
                     finger = value.location
                     dragLayout = layout
                     updateReorder(at: value.location, layout: layout)
                     return
                 }
-                if model.openFolderID != nil {
+                if model.openFolderID != nil && !holdOpenSuspended {
                     trackFolderDrag(value, layout: layout)
                     return
                 }
@@ -211,6 +228,15 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
+                if let folderID = insertingIntoFolder, let reorder {
+                    model.commitFolderInsert(appID: reorder.appID, folderID: folderID, index: insertIndex)
+                    self.reorder = nil
+                    insertingIntoFolder = nil
+                    holdOpen.reset()
+                    armClock.stop()
+                    clearArmedDrag()
+                    return
+                }
                 if folderDragID != nil && !folderHandoff {
                     clearFolderDrag()
                     return
@@ -229,14 +255,19 @@ struct OverlayRootView: View {
                     }
                 }
                 reorder = nil
-                hoverTarget = nil
-                hoverStarted = nil
-                armedTarget = nil
-                highlightTarget = nil
-                DispatchQueue.main.async {
-                    blockLaunch = false
-                }
+                clearArmedDrag()
             }
+    }
+
+    private func clearArmedDrag() {
+        hoverTarget = nil
+        hoverStarted = nil
+        armedTarget = nil
+        highlightTarget = nil
+        holdOpen.reset()
+        DispatchQueue.main.async {
+            blockLaunch = false
+        }
     }
 
     private func updateReorder(at point: CGPoint, layout: LaunchGridLayout) {
@@ -290,7 +321,84 @@ struct OverlayRootView: View {
                 session.hover(slot: reorderSlot, edge: nil)
             }
         }
+        if !holdOpenSuspended {
+            let draggedIsFolder = model.layout.folder(session.appID) != nil
+            let openTarget: String? = {
+                guard !draggedIsFolder, edge == nil, let occupant, model.layout.folder(occupant) != nil else { return nil }
+                return occupant
+            }()
+            let decision = holdOpen.sample(now: now, targetID: openTarget, targetIsExistingFolder: openTarget != nil)
+            if case .open(let folderID) = decision, insertingIntoFolder == nil {
+                session.restoreOriginal()
+                insertingIntoFolder = folderID
+                insertIndex = 0
+                armedTarget = nil
+                highlightTarget = nil
+                holdDismiss = false
+                model.openFolder(folderID)
+            }
+        }
         reorder = session
+    }
+
+    private func trackInsertion(at point: CGPoint, layout: LaunchGridLayout) {
+        guard let folderID = insertingIntoFolder,
+              let folder = model.layout.folder(folderID),
+              let appID = reorder?.appID else { return }
+        if folderPanel != .zero && FolderPanelExit.hasLeft(
+            x: Double(point.x),
+            y: Double(point.y),
+            minX: Double(folderPanel.minX),
+            minY: Double(folderPanel.minY),
+            maxX: Double(folderPanel.maxX),
+            maxY: Double(folderPanel.maxY)
+        ) {
+            exitHoldOpen(at: point, layout: layout)
+            return
+        }
+        let metrics = Self.folderMetrics(layout: layout, appCount: folder.appIDs.count + (folder.appIDs.contains(appID) ? 0 : 1))
+        let originX = folderPanel == .zero ? layout.contentCenterX - metrics.width / 2 : Double(folderPanel.minX)
+        let originY = folderPanel == .zero ? 0 : Double(folderPanel.minY)
+        insertIndex = FolderPanelMetrics.insertionIndex(
+            localX: Double(point.x) - originX,
+            localY: Double(point.y) - originY,
+            slotCount: folder.appIDs.count + (folder.appIDs.contains(appID) ? 0 : 1),
+            open: metrics
+        )
+    }
+
+    private func exitHoldOpen(at point: CGPoint, layout: LaunchGridLayout) {
+        insertingIntoFolder = nil
+        holdOpen.reset()
+        hoverTarget = nil
+        hoverStarted = nil
+        armedTarget = nil
+        highlightTarget = nil
+        holdOpenSuspended = true
+        holdDismiss = true
+        if var session = reorder {
+            session.restoreOriginal()
+            reorder = session
+        }
+        updateReorder(at: point, layout: layout)
+    }
+
+    private func arrangedFolderIDs(_ folder: AppFolder) -> [String] {
+        guard insertingIntoFolder == folder.id, let appID = reorder?.appID else { return folder.appIDs }
+        return FolderEditing.previewOrder(existing: folder.appIDs, appID: appID, index: insertIndex)
+    }
+
+    private static func folderMetrics(layout: LaunchGridLayout, appCount: Int) -> FolderOpenMetrics {
+        FolderPanelMetrics.openMetrics(
+            gridWidth: layout.gridWidth,
+            columns: layout.columns,
+            columnStride: layout.columnStride,
+            rowStride: layout.rowStride,
+            iconSide: layout.iconSide,
+            overlayWidth: layout.pageWidth,
+            availableHeight: layout.gridHeight,
+            appCount: appCount
+        )
     }
 
     private func iconID(at point: CGPoint, layout: LaunchGridLayout) -> String? {
@@ -543,10 +651,14 @@ private final class ArmClock: ObservableObject {
 private struct FolderCover: View {
     @ObservedObject var model: GridBackModel
     var folder: AppFolder
+    var arrangedIDs: [String]
     var layout: LaunchGridLayout
     var tileCenter: CGPoint
+    var restCenterX: CGFloat
     var reduceMotion: Bool
     var collapse: Bool
+    var holdDismiss: Bool
+    var passesDragThrough: Bool
     var suppressLaunch: Bool
     @Binding var gridChromeVisible: Bool
     @Binding var iconFrames: [String: CGRect]
@@ -560,11 +672,16 @@ private struct FolderCover: View {
 
     var body: some View {
         GeometryReader { overlay in
-            let center = CGPoint(x: overlay.size.width / 2, y: overlay.size.height / 2)
+            let center = CGPoint(x: restCenterX, y: overlay.size.height / 2)
             let metrics = FolderPanelMetrics.openMetrics(
+                gridWidth: layout.gridWidth,
+                columns: layout.columns,
+                columnStride: layout.columnStride,
+                rowStride: layout.rowStride,
+                iconSide: layout.iconSide,
                 overlayWidth: overlay.size.width,
-                preferredIcon: layout.iconSide,
-                appCount: folder.appIDs.count
+                availableHeight: layout.gridHeight,
+                appCount: max(arrangedIDs.count, 1)
             )
             let progress = revealed ? 1.0 : 0.0
             let shape = FolderPanelMetrics.shape(
@@ -587,10 +704,13 @@ private struct FolderCover: View {
                     .position(x: center.x, y: center.y - metrics.height / 2 - 28)
                     .opacity(titleShown ? 1 : 0)
             }
-            .allowsHitTesting(!collapse)
+            .allowsHitTesting(!collapse && !passesDragThrough)
         }
         .onChange(of: collapse) { _, shouldCollapse in
-            if shouldCollapse { beginClose() }
+            if shouldCollapse { beginClose(showGrid: true) }
+        }
+        .onChange(of: holdDismiss) { _, dismiss in
+            if dismiss { beginClose(showGrid: true) }
         }
         .onAppear {
             name = folder.name
@@ -600,10 +720,10 @@ private struct FolderCover: View {
                 titleShown = true
                 gridChromeVisible = false
             } else {
-                withAnimation(.easeOut(duration: 0.42)) {
+                withAnimation(.easeOut(duration: 0.28)) {
                     revealed = true
                 }
-                withAnimation(.easeOut(duration: 0.3)) {
+                withAnimation(.easeOut(duration: 0.2)) {
                     titleShown = true
                     gridChromeVisible = false
                 }
@@ -627,10 +747,10 @@ private struct FolderCover: View {
     private func card(metrics: FolderOpenMetrics, shape: FolderContainerShape, progress: Double) -> some View {
         let radius = shape.cornerRadius
         return ZStack(alignment: .topLeading) {
-            ForEach(Array(folder.appIDs.enumerated()), id: \.element) { index, id in
+            ForEach(Array(arrangedIDs.enumerated()), id: \.element) { index, id in
                 let icon = FolderPanelMetrics.iconBox(
                     index: index,
-                    appCount: folder.appIDs.count,
+                    appCount: arrangedIDs.count,
                     progress: progress,
                     tileSide: layout.iconSide,
                     open: metrics
@@ -704,7 +824,7 @@ private struct FolderCover: View {
         .frame(width: side, height: side)
     }
 
-    private func beginClose() {
+    private func beginClose(showGrid: Bool? = nil) {
         guard !closing else { return }
         closing = true
         if reduceMotion {
@@ -712,8 +832,8 @@ private struct FolderCover: View {
             model.closeFolder()
             return
         }
-        let showGridWhileClosing = collapse
-        withAnimation(.easeInOut(duration: 0.46), completionCriteria: .logicallyComplete) {
+        let showGridWhileClosing = showGrid ?? collapse
+        withAnimation(.easeInOut(duration: 0.32), completionCriteria: .logicallyComplete) {
             revealed = false
             titleShown = false
             if showGridWhileClosing {

@@ -59,6 +59,9 @@ public struct FolderOpenMetrics: Equatable, Sendable {
     public var iconSide: Double
     public var sideMargin: Double
     public var columns: Int
+    public var rows: Int
+    public var columnStride: Double
+    public var rowStride: Double
 }
 
 public struct FolderContainerShape: Equatable, Sendable {
@@ -83,45 +86,62 @@ public struct FolderIconBox: Equatable, Sendable {
 }
 
 public enum FolderPanelMetrics {
-    /// The open panel stops growing well before the edges of the overlay.
-    public static let maxWidth: Double = 460
-    /// At least this fraction of the overlay stays wallpaper on each side.
-    public static let sideMarginFraction: Double = 0.24
     public static let openCornerRadius: Double = 28
     public static let tileCornerFactor: Double = 0.22
-    public static let padding: Double = 28
-    public static let iconGap: Double = 18
-    public static let labelBlock: Double = 40
-    public static let rowGap: Double = 16
+    public static let verticalPadding: Double = 16
 
-    public static func openWidth(overlayWidth: Double) -> Double {
-        let available = max(overlayWidth * (1 - sideMarginFraction * 2), 180)
-        return min(maxWidth, available)
-    }
-
-    public static func sideMargin(overlayWidth: Double) -> Double {
-        max(0, (overlayWidth - openWidth(overlayWidth: overlayWidth)) / 2)
-    }
-
-    public static func openMetrics(overlayWidth: Double, preferredIcon: Double, appCount: Int) -> FolderOpenMetrics {
+    /// The open folder is as wide as the main icon grid, using that grid's icon size and stride.
+    /// Extra apps add rows. If the rows would leave the screen, the row height shrinks and the icon stays square.
+    public static func openMetrics(
+        gridWidth: Double,
+        columns: Int,
+        columnStride: Double,
+        rowStride: Double,
+        iconSide: Double,
+        overlayWidth: Double,
+        availableHeight: Double,
+        appCount: Int
+    ) -> FolderOpenMetrics {
+        let columns = max(columns, 1)
         let count = max(appCount, 1)
-        let columns = min(count, 4)
         let rows = (count + columns - 1) / columns
-        let width = openWidth(overlayWidth: overlayWidth)
-        let inner = max(width - padding * 2, 36)
-        let gaps = iconGap * Double(max(columns - 1, 0))
-        let fitted = (inner - gaps) / Double(columns)
-        let icon = min(max(preferredIcon, 36), max(fitted, 36))
-        let height = padding * 2
-            + Double(rows) * (icon + labelBlock)
-            + Double(max(rows - 1, 0)) * rowGap
+        let fittedWidth = min(max(gridWidth, iconSide + 32), max(overlayWidth - 32, iconSide + 32))
+        let usedColumnStride = fittedWidth / Double(columns)
+        let limit = max(availableHeight, rowStride + verticalPadding * 2)
+        var usedRowStride = max(rowStride, 1)
+        var usedIcon = iconSide
+        var height = verticalPadding * 2 + Double(rows) * usedRowStride
+        if height > limit {
+            let inner = max(limit - verticalPadding * 2, 40)
+            usedRowStride = inner / Double(rows)
+            let scale = min(usedRowStride / max(rowStride, 1), 1)
+            usedIcon = max(28, iconSide * scale)
+            height = limit
+        }
         return FolderOpenMetrics(
-            width: width,
+            width: fittedWidth,
             height: height,
-            iconSide: icon,
-            sideMargin: sideMargin(overlayWidth: overlayWidth),
-            columns: columns
+            iconSide: usedIcon,
+            sideMargin: max(0, (overlayWidth - fittedWidth) / 2),
+            columns: columns,
+            rows: rows,
+            columnStride: usedColumnStride,
+            rowStride: usedRowStride
         )
+    }
+
+    /// Index of the held app inside the open folder. `slotCount` includes that app.
+    public static func insertionIndex(localX: Double, localY: Double, slotCount: Int, open: FolderOpenMetrics) -> Int {
+        let columns = max(open.columns, 1)
+        let slots = max(slotCount, 1)
+        let rows = max(1, (slots + columns - 1) / columns)
+        let strideX = max(open.columnStride, 1)
+        let strideY = max(open.rowStride, 1)
+        let rawColumn = localX / strideX
+        let column = min(max(Int(rawColumn), 0), columns - 1)
+        let columnIndex = min(column + (rawColumn - Double(column) >= 0.5 ? 1 : 0), columns)
+        let row = min(max(Int((localY - verticalPadding) / strideY), 0), rows - 1)
+        return min(max(row * columns + columnIndex, 0), slots - 1)
     }
 
     /// Width and height move on their own, so a square becomes a wider rectangle.
@@ -167,22 +187,64 @@ public enum FolderPanelMetrics {
         let miniX = miniOrigin + Double(miniColumn) * (mini + miniSpacing) + mini / 2
         let miniY = miniOrigin + Double(miniRow) * (mini + miniSpacing) + mini / 2
 
-        let columns = open.columns
-        let rows = (count + columns - 1) / columns
+        let columns = max(open.columns, 1)
         let column = min(max(index, 0), count - 1) % columns
         let row = min(max(index, 0), count - 1) / columns
-        let rowWidth = Double(columns) * open.iconSide + Double(max(columns - 1, 0)) * iconGap
-        let originX = (open.width - rowWidth) / 2
-        let openX = originX + Double(column) * (open.iconSide + iconGap) + open.iconSide / 2
-        let block = open.iconSide + labelBlock
-        let contentHeight = Double(rows) * block + Double(max(rows - 1, 0)) * rowGap
-        let originY = (open.height - contentHeight) / 2
-        let openY = originY + Double(row) * (block + rowGap) + open.iconSide / 2
+        let strideX = max(open.columnStride, 1)
+        let strideY = max(open.rowStride, 1)
+        let openX = (Double(column) + 0.5) * strideX
+        let openY = verticalPadding + Double(row) * strideY + open.iconSide / 2
         return FolderIconBox(
             centerX: miniX + (openX - miniX) * t,
             centerY: miniY + (openY - miniY) * t,
             side: mini + (open.iconSide - mini) * t
         )
+    }
+}
+
+public enum FolderHoldOpen {
+    public static let duration: Double = 2
+
+    public enum Decision: Equatable, Sendable {
+        case idle
+        case waiting(targetID: String, elapsed: Double)
+        case open(targetID: String)
+        case cancelled
+    }
+
+    /// Remembers which folder the pointer is resting on. A new target restarts the clock,
+    /// so a timer for the previous folder cannot open it.
+    public struct Watch: Equatable, Sendable {
+        public var targetID: String?
+        public var startedAt: TimeInterval?
+        public var consumedTargetID: String?
+        public init() {}
+
+        public mutating func reset() {
+            targetID = nil
+            startedAt = nil
+            consumedTargetID = nil
+        }
+
+        public mutating func sample(now: TimeInterval, targetID: String?, targetIsExistingFolder: Bool) -> Decision {
+            guard let targetID, targetIsExistingFolder else {
+                let hadTarget = self.targetID != nil
+                self.targetID = nil
+                self.startedAt = nil
+                return hadTarget ? .cancelled : .idle
+            }
+            if targetID != self.targetID {
+                self.targetID = targetID
+                self.startedAt = now
+                return .waiting(targetID: targetID, elapsed: 0)
+            }
+            let elapsed = now - (startedAt ?? now)
+            if elapsed >= duration, consumedTargetID != targetID {
+                consumedTargetID = targetID
+                return .open(targetID: targetID)
+            }
+            return .waiting(targetID: targetID, elapsed: elapsed)
+        }
     }
 }
 
@@ -240,6 +302,37 @@ public enum FolderEditing {
                 folders[index].appIDs.append(draggedAppID)
             }
         }
+        return LayoutEditor.repair(Layout(pages: pages, folders: folders, metrics: layout.metrics))
+    }
+
+    /// Order the folder would show if `appID` were dropped at `index`. Does not change `existing`.
+    public static func previewOrder(existing: [String], appID: String, index: Int) -> [String] {
+        var ids = existing.filter { $0 != appID }
+        let at = min(max(0, index), ids.count)
+        ids.insert(appID, at: at)
+        return ids
+    }
+
+    /// Moves a loose app into an existing folder at `index`, shifting the apps already there.
+    /// The result is unchanged when the folder or the loose app is missing.
+    public static func insertApp(layout: Layout, appID: String, folderID: String, at index: Int) -> Layout {
+        guard layout.folder(folderID) != nil else { return layout }
+        guard let path = layout.indexPath(of: appID),
+              case .app = layout.pages[path.page][path.slot] else {
+            return layout
+        }
+        var pages = layout.pages
+        pages[path.page].remove(at: path.slot)
+        if pages[path.page].isEmpty {
+            pages.remove(at: path.page)
+        }
+        var folders = layout.folders
+        for folderIndex in folders.indices {
+            folders[folderIndex].appIDs.removeAll { $0 == appID }
+        }
+        guard let folderIndex = folders.firstIndex(where: { $0.id == folderID }) else { return layout }
+        let at = min(max(0, index), folders[folderIndex].appIDs.count)
+        folders[folderIndex].appIDs.insert(appID, at: at)
         return LayoutEditor.repair(Layout(pages: pages, folders: folders, metrics: layout.metrics))
     }
 

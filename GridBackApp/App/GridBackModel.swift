@@ -234,6 +234,14 @@ final class GridBackModel: ObservableObject {
         save()
     }
 
+    func commitFolderInsert(appID: String, folderID: String, index: Int) {
+        let updated = FolderEditing.insertApp(layout: layout, appID: appID, folderID: folderID, at: index)
+        guard updated != layout else { return }
+        layout = updated
+        openFolderID = folderID
+        save()
+    }
+
     func returnAppToGrid(_ appID: String) {
         let page = layout.pages.indices.contains(currentPage) ? currentPage : 0
         let slot = layout.pages.indices.contains(page) ? layout.pages[page].count : 0
