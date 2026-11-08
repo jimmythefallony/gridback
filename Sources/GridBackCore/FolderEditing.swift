@@ -53,7 +53,30 @@ public enum FolderDrop {
     }
 }
 
+public enum FolderPanelExit {
+    /// The pointer must clear the panel by this many points, so a small move inside does not pull the app out.
+    public static let hysteresis: Double = 24
+
+    public static func hasLeft(
+        x: Double,
+        y: Double,
+        minX: Double,
+        minY: Double,
+        maxX: Double,
+        maxY: Double,
+        hysteresis: Double = hysteresis
+    ) -> Bool {
+        x < minX - hysteresis || x > maxX + hysteresis || y < minY - hysteresis || y > maxY + hysteresis
+    }
+}
+
 public enum FolderEditing {
+    /// The folder id that `group` created, if this change made a new folder rather than adding to one.
+    public static func createdFolderID(before: Layout, after: Layout) -> String? {
+        let existing = Set(before.folders.map(\.id))
+        return after.folders.first { !existing.contains($0.id) }?.id
+    }
+
     /// Puts the dragged app into a new folder with the target, or into the target folder.
     /// The dragged item must be a loose app. The result never nests folders.
     public static func group(layout: Layout, draggedAppID: String, targetID: String) -> Layout {

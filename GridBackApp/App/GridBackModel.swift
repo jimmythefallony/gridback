@@ -219,9 +219,13 @@ final class GridBackModel: ObservableObject {
     }
 
     func group(draggedAppID: String, targetID: String) {
-        let updated = FolderEditing.group(layout: layout, draggedAppID: draggedAppID, targetID: targetID)
-        guard updated != layout else { return }
+        let previous = layout
+        let updated = FolderEditing.group(layout: previous, draggedAppID: draggedAppID, targetID: targetID)
+        guard updated != previous else { return }
         layout = updated
+        if let created = FolderEditing.createdFolderID(before: previous, after: updated) {
+            openFolderID = created
+        }
         if let path = updated.indexPath(of: targetID) ?? updated.folders.compactMap({ folder in
             folder.appIDs.contains(draggedAppID) ? updated.indexPath(of: folder.id) : nil
         }).first {

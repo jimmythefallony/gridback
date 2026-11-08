@@ -16,6 +16,13 @@ struct OverlayRootView: View {
     @State private var highlightTarget: String?
     @State private var dragLayout: LaunchGridLayout?
     @StateObject private var armClock = ArmClock()
+    @StateObject private var pointerHandoff = PointerHandoff()
+    @State private var folderDragID: String?
+    @State private var folderHandoff = false
+    @State private var dragSettled = false
+    @State private var folderPanel = CGRect.zero
+    @State private var folderIconFrames: [String: CGRect] = [:]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { overlay in
@@ -32,9 +39,7 @@ struct OverlayRootView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if model.openFolderID != nil {
-                            model.closeFolder()
-                        } else if reorder == nil {
+                        if model.openFolderID == nil && reorder == nil && folderDragID == nil {
                             model.hideOverlay()
                         }
                     }
@@ -74,15 +79,26 @@ struct OverlayRootView: View {
                     .position(x: chrome.contentCenterX, y: chrome.pageControlCenterY)
                 }
 
-                if let reorder {
-                    draggedTile(reorder.appID, iconSide: chrome.iconSide)
+                if let folderID = model.openFolderID, let folder = model.layout.folder(folderID) {
+                    FolderCover(
+                        model: model,
+                        folder: folder,
+                        layout: chrome,
+                        tileCenter: folderTileCenter(folderID, layout: chrome, overlaySize: overlay.size),
+                        reduceMotion: reduceMotion,
+                        collapse: folderHandoff,
+                        suppressLaunch: blockLaunch,
+                        iconFrames: $folderIconFrames,
+                        panelFrame: $folderPanel,
+                        hiddenID: folderDragID
+                    )
+                }
+
+                if reorder != nil || folderDragID != nil {
+                    draggedTile((reorder?.appID ?? folderDragID) ?? "", iconSide: chrome.iconSide)
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
                         .position(finger)
                         .allowsHitTesting(false)
-                }
-
-                if let folderID = model.openFolderID, let folder = model.layout.folder(folderID) {
-                    FolderCover(model: model, folder: folder, layout: chrome)
                 }
 
                 if let warning = model.persistenceWarning {
@@ -152,7 +168,17 @@ struct OverlayRootView: View {
     private func reorderGesture(layout: LaunchGridLayout) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
-                guard !model.isSearching, !isSwiping, model.openFolderID == nil else { return }
+                if folderHandoff {
+                    finger = value.location
+                    dragLayout = layout
+                    updateReorder(at: value.location, layout: layout)
+                    return
+                }
+                if model.openFolderID != nil {
+                    trackFolderDrag(value, layout: layout)
+                    return
+                }
+                guard !model.isSearching, !isSwiping else { return }
                 if reorder == nil {
                     guard let id = iconID(at: value.startLocation, layout: layout) else { return }
                     reorder = GridReorderSession(
@@ -172,6 +198,15 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
+                if folderDragID != nil && !folderHandoff {
+                    clearFolderDrag()
+                    return
+                }
+                if folderHandoff {
+                    if pointerHandoff.isTracking { return }
+                    finishHandoff()
+                    return
+                }
                 armClock.stop()
                 if let reorder {
                     if let armedTarget {
@@ -305,6 +340,88 @@ struct OverlayRootView: View {
         return false
     }
 
+    private func trackFolderDrag(_ value: DragGesture.Value, layout: LaunchGridLayout) {
+        if folderDragID == nil {
+            guard let id = folderIconFrames.first(where: { $0.value.contains(value.startLocation) })?.key else { return }
+            folderDragID = id
+            dragSettled = false
+            blockLaunch = true
+            pointerHandoff.onMove = { [self] point in
+                finger = point
+                dragLayout = layout
+                if folderHandoff {
+                    updateReorder(at: point, layout: layout)
+                } else {
+                    beginFolderHandoffIfNeeded(at: point, layout: layout)
+                }
+            }
+            pointerHandoff.onUp = { [self] _ in
+                if folderHandoff {
+                    finishHandoff()
+                } else {
+                    clearFolderDrag()
+                }
+            }
+            pointerHandoff.start()
+        }
+        finger = value.location
+        dragLayout = layout
+        beginFolderHandoffIfNeeded(at: value.location, layout: layout)
+    }
+
+    private func beginFolderHandoffIfNeeded(at point: CGPoint, layout: LaunchGridLayout) {
+        guard let id = folderDragID, !folderHandoff, folderPanel != .zero else { return }
+        let left = FolderPanelExit.hasLeft(
+            x: Double(point.x),
+            y: Double(point.y),
+            minX: Double(folderPanel.minX),
+            minY: Double(folderPanel.minY),
+            maxX: Double(folderPanel.maxX),
+            maxY: Double(folderPanel.maxY)
+        )
+        guard left else { return }
+        let page = min(model.currentPage, max(model.layout.pages.count - 1, 0))
+        let count = model.layout.pages.indices.contains(page) ? model.layout.pages[page].count : 0
+        let slot = layout.insertionSlot(x: Double(point.x), y: Double(point.y), itemCount: count) ?? count
+        let extracted = FolderEditing.moveAppOut(layout: model.layout, appID: id, toPage: page, toSlot: slot)
+        folderHandoff = true
+        reorder = GridReorderSession(appID: id, layout: extracted, page: page)
+        updateReorder(at: point, layout: layout)
+    }
+
+    private func finishHandoff() {
+        guard folderHandoff, !dragSettled else { return }
+        dragSettled = true
+        pointerHandoff.stop()
+        if let reorder {
+            model.commitReorder(reorder.preview, page: reorder.page)
+        }
+        reorder = nil
+        clearFolderDrag()
+        armClock.stop()
+    }
+
+    private func clearFolderDrag() {
+        folderDragID = nil
+        folderHandoff = false
+        pointerHandoff.stop()
+        DispatchQueue.main.async {
+            blockLaunch = false
+        }
+    }
+
+    private func folderTileCenter(_ id: String, layout: LaunchGridLayout, overlaySize: CGSize) -> CGPoint {
+        guard let path = model.layout.indexPath(of: id), path.page == model.currentPage else {
+            return CGPoint(x: overlaySize.width / 2, y: overlaySize.height / 2)
+        }
+        let pageLeft = overlaySize.width / 2 - layout.pageWidth / 2
+        let pageTop = layout.originY
+        return CGPoint(
+            x: pageLeft + layout.originX + layout.columnCenter(path.slot),
+            y: pageTop + layout.rowCenter(path.slot)
+        )
+    }
+
     private func draggedTile(_ id: String, iconSide: CGFloat) -> some View {
         if let folder = model.layout.folder(id) {
             return AnyView(
@@ -360,6 +477,36 @@ struct OverlayRootView: View {
     }
 }
 
+private final class PointerHandoff: ObservableObject {
+    var onMove: ((CGPoint) -> Void)?
+    var onUp: ((CGPoint) -> Void)?
+    private var monitor: Any?
+    var isTracking: Bool { monitor != nil }
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self, let window = event.window else { return event }
+            let height = window.contentView?.bounds.height ?? window.frame.height
+            let point = CGPoint(x: event.locationInWindow.x, y: height - event.locationInWindow.y)
+            if event.type == .leftMouseUp {
+                self.onUp?(point)
+                self.stop()
+            } else {
+                self.onMove?(point)
+            }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+}
+
 private final class ArmClock: ObservableObject {
     @Published private(set) var tick = 0
     private var timer: Timer?
@@ -383,62 +530,137 @@ private struct FolderCover: View {
     @ObservedObject var model: GridBackModel
     var folder: AppFolder
     var layout: LaunchGridLayout
+    var tileCenter: CGPoint
+    var reduceMotion: Bool
+    var collapse: Bool
+    var suppressLaunch: Bool
+    @Binding var iconFrames: [String: CGRect]
+    @Binding var panelFrame: CGRect
+    var hiddenID: String?
     @State private var name: String = ""
+    @State private var revealed = false
+    @State private var closing = false
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .onTapGesture { model.closeFolder() }
-            VStack(spacing: 18) {
-                TextField(AppFolder.defaultName, text: $name)
-                    .textFieldStyle(.plain)
-                    .multilineTextAlignment(.center)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: 280)
-                    .focused($nameFocused)
-                    .onSubmit { commitName() }
-                    .onAppear { name = folder.name }
-                    .onDisappear { commitName() }
-                let columns = min(max(folder.appIDs.count, 1), 4)
-                LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
-                    ForEach(folder.appIDs, id: \.self) { id in
-                        AppIconButton(
-                            title: model.appsByID[id]?.displayName ?? id,
-                            image: model.iconImages[id],
-                            iconSide: layout.iconSide,
-                            labelWidth: layout.iconSide + 24
-                        ) {
-                            model.launch(id: id)
-                        }
-                        .gesture(ejectGesture(id))
-                    }
-                }
+        GeometryReader { overlay in
+            let center = CGPoint(x: overlay.size.width / 2, y: overlay.size.height / 2)
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(revealed ? 1 : 0)
+                    .ignoresSafeArea()
+                Color.black.opacity(revealed ? 0.38 : 0)
+                    .ignoresSafeArea()
+                    .onTapGesture { beginClose() }
+                panel
+                    .scaleEffect(revealed ? 1 : 0.16, anchor: .center)
+                    .position(revealed ? center : tileCenter)
             }
-            .padding(28)
-            .frame(minWidth: 280)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            .allowsHitTesting(!collapse)
+        }
+        .onChange(of: collapse) { _, shouldCollapse in
+            if shouldCollapse { beginClose() }
+        }
+        .onAppear {
+            name = folder.name
+            if reduceMotion {
+                revealed = true
+            } else {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                    revealed = true
+                }
             }
         }
     }
 
-    private func ejectGesture(_ id: String) -> some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .named("overlay"))
-            .onEnded { value in
-                let travel = hypot(value.translation.width, value.translation.height)
-                guard travel > 48 else { return }
-                model.returnAppToGrid(id)
+    private var panel: some View {
+        VStack(spacing: 18) {
+            TextField(AppFolder.defaultName, text: $name)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: 280)
+                .focused($nameFocused)
+                .onSubmit { commitName() }
+                .onDisappear { commitName() }
+            let columns = min(max(folder.appIDs.count, 1), 4)
+            LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
+                ForEach(folder.appIDs, id: \.self) { id in
+                    AppIconButton(
+                        title: model.appsByID[id]?.displayName ?? id,
+                        image: model.iconImages[id],
+                        iconSide: layout.iconSide,
+                        labelWidth: layout.iconSide + 24
+                    ) {
+                        guard hiddenID == nil, !suppressLaunch else { return }
+                        model.launch(id: id)
+                    }
+                    .opacity(id == hiddenID ? 0 : 1)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: FolderIconFramesKey.self,
+                                value: [id: geo.frame(in: .named("overlay"))]
+                            )
+                        }
+                    }
+                }
             }
+        }
+        .padding(28)
+        .frame(minWidth: 320)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+        }
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: FolderPanelFrameKey.self,
+                    value: geo.frame(in: .named("overlay"))
+                )
+            }
+        }
+        .onPreferenceChange(FolderIconFramesKey.self) { iconFrames = $0 }
+        .onPreferenceChange(FolderPanelFrameKey.self) { panelFrame = $0 }
+    }
+
+    private func beginClose() {
+        guard !closing else { return }
+        if reduceMotion {
+            model.closeFolder()
+            return
+        }
+        closing = true
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+            revealed = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+            model.closeFolder()
+        }
     }
 
     private func commitName() {
         model.renameFolder(folder.id, to: name)
         nameFocused = false
+    }
+}
+
+private struct FolderIconFramesKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private struct FolderPanelFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 

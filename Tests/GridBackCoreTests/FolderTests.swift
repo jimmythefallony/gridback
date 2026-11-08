@@ -247,6 +247,50 @@ final class FolderTests: XCTestCase {
         let loaded = try XCTUnwrap(store.load())
         XCTAssertEqual(loaded.layout.folders.map(\.name), ["Tools"])
         XCTAssertEqual(loaded.layout.folders.map(\.appIDs), [["a", "b"]])
-        XCTAssertEqual(loaded.layout.orderedIDs, ["a", "b", "c"])
+    }
+
+    func testOnlyANewFolderReportsAnIdentifierToOpen() {
+        let layout = Layout(pages: [["a", "b", "c"]], metrics: twoByTwo)
+        let created = FolderEditing.group(layout: layout, draggedAppID: "b", targetID: "a")
+        XCTAssertEqual(FolderEditing.createdFolderID(before: layout, after: created), created.folders[0].id)
+        let added = FolderEditing.group(layout: created, draggedAppID: "c", targetID: created.folders[0].id)
+        XCTAssertNil(FolderEditing.createdFolderID(before: created, after: added))
+    }
+
+    func testLeavingThePanelRequiresTheHysteresisMargin() {
+        let inside = FolderPanelExit.hasLeft(x: 200, y: 200, minX: 100, minY: 100, maxX: 300, maxY: 300)
+        let barelyOutside = FolderPanelExit.hasLeft(x: 310, y: 200, minX: 100, minY: 100, maxX: 300, maxY: 300)
+        let pastRight = FolderPanelExit.hasLeft(x: 325, y: 200, minX: 100, minY: 100, maxX: 300, maxY: 300)
+        let pastTop = FolderPanelExit.hasLeft(x: 200, y: 70, minX: 100, minY: 100, maxX: 300, maxY: 300)
+        XCTAssertFalse(inside)
+        XCTAssertFalse(barelyOutside)
+        XCTAssertTrue(pastRight)
+        XCTAssertTrue(pastTop)
+    }
+
+    func testTheDropSlotChoosesTheGapAndACancelledDragDoesNotSave() throws {
+        let created = FolderEditing.group(
+            layout: Layout(pages: [["a", "b", "c"]], metrics: twoByTwo),
+            draggedAppID: "b",
+            targetID: "a"
+        )
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+        let atFront = FolderEditing.moveAppOut(layout: created, appID: "b", toPage: 0, toSlot: 0)
+        let atEnd = FolderEditing.moveAppOut(layout: created, appID: "b", toPage: 0, toSlot: 2)
+        XCTAssertEqual(atFront.pages[0].map(\.id).first, "b")
+        XCTAssertEqual(atEnd.pages[0].map(\.id).last, "b")
+        XCTAssertNotEqual(atFront.orderedIDs, atEnd.orderedIDs)
+        XCTAssertFalse(atFront.folders[0].appIDs.contains("b"))
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gridback-folder-drop-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = PersistenceStore(directoryURL: directory)
+        try store.save(PersistedState(layout: atEnd, shortcut: .default))
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.layout.orderedIDs, atEnd.orderedIDs)
+        XCTAssertEqual(loaded.layout.folders[0].appIDs, ["a"])
+        XCTAssertEqual(loaded.layout.pages[0].map(\.id).last, "b")
     }
 }
