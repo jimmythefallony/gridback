@@ -183,8 +183,12 @@ final class OverlayController: NSObject {
                 return
             }
             DispatchQueue.main.async {
-                guard self?.wantsGrid == true else { return }
-                self?.model?.hideOverlay()
+                guard let self, self.wantsGrid else { return }
+                if self.model?.heldDrag.isActive == true {
+                    _ = self.model?.handleKeyDown(keyCode: 53, characters: "", modifiers: [])
+                    return
+                }
+                self.model?.hideOverlay()
             }
         }
     }

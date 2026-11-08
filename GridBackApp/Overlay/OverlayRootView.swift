@@ -140,6 +140,10 @@ struct OverlayRootView: View {
                 visualPage = CGFloat(model.currentPage)
             }
             .onChange(of: armClock.tick) { _, _ in
+                if model.heldDrag.suppressCommit {
+                    abandonDragVisuals()
+                    return
+                }
                 guard reorder != nil, insertingIntoFolder == nil, let dragLayout else { return }
                 updateReorder(at: finger, layout: dragLayout)
             }
