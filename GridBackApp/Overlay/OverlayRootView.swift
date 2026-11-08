@@ -27,6 +27,7 @@ struct OverlayRootView: View {
     @State private var insertingIntoFolder: String?
     @State private var insertIndex = 0
     @State private var insertionAnchor = CGRect.null
+    @State private var showingInsertionGap = false
     @State private var holdOpenSuspended = false
     @State private var holdDismiss = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -246,7 +247,7 @@ struct OverlayRootView: View {
                     abandonDragVisuals()
                     return
                 }
-                switch model.completeHeldDrag() {
+                switch model.resolveHoverRelease(insideContent: pointerIsInsideFolderContent(finger)) {
                 case .none:
                     abandonDragVisuals()
                     return
@@ -352,7 +353,10 @@ struct OverlayRootView: View {
                 session.restoreOriginal()
                 insertingIntoFolder = folderID
                 insertIndex = 0
+                showingInsertionGap = false
                 insertionAnchor = tileAnchor(folderID, layout: layout)
+                hoverTarget = nil
+                hoverStarted = nil
                 armedTarget = nil
                 highlightTarget = nil
                 holdDismiss = false
@@ -383,6 +387,11 @@ struct OverlayRootView: View {
             exitHoldOpen(at: point, layout: layout)
             return
         }
+        guard pointerIsInsideFolderContent(point) else {
+            showingInsertionGap = false
+            return
+        }
+        showingInsertionGap = true
         let metrics = Self.folderMetrics(layout: layout, appCount: folder.appIDs.count + (folder.appIDs.contains(appID) ? 0 : 1))
         let originX = folderPanel == .zero ? layout.contentCenterX - metrics.width / 2 : Double(folderPanel.minX)
         let originY = folderPanel == .zero ? 0 : Double(folderPanel.minY)
@@ -398,6 +407,8 @@ struct OverlayRootView: View {
     private func exitHoldOpen(at point: CGPoint, layout: LaunchGridLayout) {
         insertingIntoFolder = nil
         insertionAnchor = .null
+        showingInsertionGap = false
+        model.leaveHeldInsertion()
         holdOpen.reset()
         hoverTarget = nil
         hoverStarted = nil
@@ -410,11 +421,24 @@ struct OverlayRootView: View {
             reorder = session
         }
         updateReorder(at: point, layout: layout)
+        armedTarget = nil
     }
 
     private func arrangedFolderIDs(_ folder: AppFolder) -> [String] {
-        guard insertingIntoFolder == folder.id, let appID = reorder?.appID else { return folder.appIDs }
+        guard showingInsertionGap, insertingIntoFolder == folder.id, let appID = reorder?.appID else { return folder.appIDs }
         return FolderEditing.previewOrder(existing: folder.appIDs, appID: appID, index: insertIndex)
+    }
+
+    private func pointerIsInsideFolderContent(_ point: CGPoint) -> Bool {
+        FolderInsertionGate.isInsideContent(
+            x: Double(point.x),
+            y: Double(point.y),
+            panelReady: folderPanel != .zero && insertingIntoFolder != nil,
+            panelMinX: Double(folderPanel.minX),
+            panelMinY: Double(folderPanel.minY),
+            panelMaxX: Double(folderPanel.maxX),
+            panelMaxY: Double(folderPanel.maxY)
+        )
     }
 
     private static func folderMetrics(layout: LaunchGridLayout, appCount: Int) -> FolderOpenMetrics {

@@ -195,6 +195,19 @@ final class GridBackModel: ObservableObject {
         heldDrag = drag
     }
 
+    func leaveHeldInsertion() {
+        var drag = heldDrag
+        drag.leaveInsertion()
+        heldDrag = drag
+    }
+
+    func resolveHoverRelease(insideContent: Bool) -> HeldDrag.Outcome {
+        var drag = heldDrag
+        let outcome = drag.resolveHoverRelease(insideContent: insideContent)
+        heldDrag = drag
+        return outcome
+    }
+
     func completeHeldDrag() -> HeldDrag.Outcome {
         var drag = heldDrag
         let outcome = drag.complete()

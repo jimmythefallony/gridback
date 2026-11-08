@@ -347,6 +347,21 @@ public struct HeldDrag: Equatable, Sendable {
         phase = .inserting(appID: appID, folderID: folderID, index: index)
     }
 
+    /// The pointer left the open folder. A later drop is a grid drop, not an insert.
+    public mutating func leaveInsertion() {
+        guard case .inserting(let appID, _, _) = phase else { return }
+        phase = .grid(appID: appID)
+    }
+
+    /// Insert only when the pointer is released inside the folder panel.
+    /// The tile that kept the folder open, and the margin outside the panel, are not a drop.
+    public mutating func resolveHoverRelease(insideContent: Bool) -> Outcome {
+        if case .inserting(let appID, _, _) = phase, !insideContent {
+            phase = .grid(appID: appID)
+        }
+        return complete()
+    }
+
     /// Ends the drag without a commit. A later `complete` returns `.none`.
     public mutating func escape() -> Cancellation? {
         guard let origin, phase != .idle else { return nil }
@@ -462,6 +477,20 @@ public enum FolderInsertionGate {
             minX: anchorMinX, minY: anchorMinY, maxX: anchorMaxX, maxY: anchorMaxY
         )
         return outsidePanel && outsideTile
+    }
+
+    /// The panel's own bounds. The source tile and the exit margin are not included.
+    public static func isInsideContent(
+        x: Double,
+        y: Double,
+        panelReady: Bool,
+        panelMinX: Double,
+        panelMinY: Double,
+        panelMaxX: Double,
+        panelMaxY: Double
+    ) -> Bool {
+        guard panelReady else { return false }
+        return x >= panelMinX && x <= panelMaxX && y >= panelMinY && y <= panelMaxY
     }
 }
 

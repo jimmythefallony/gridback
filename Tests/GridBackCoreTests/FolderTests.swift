@@ -513,6 +513,31 @@ final class FolderTests: XCTestCase {
         XCTAssertFalse(beforeFrame)
         XCTAssertTrue(leftBoth)
 
+        let belowPanelOnTile = FolderInsertionGate.isInsideContent(
+            x: 400, y: 520,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY
+        )
+        let insidePanel = FolderInsertionGate.isInsideContent(
+            x: 800, y: 400,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY
+        )
+        let marginOutside = FolderInsertionGate.isInsideContent(
+            x: 800, y: 510,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY
+        )
+        XCTAssertFalse(belowPanelOnTile)
+        XCTAssertTrue(insidePanel)
+        XCTAssertFalse(marginOutside)
+        XCTAssertFalse(FolderInsertionGate.shouldClose(
+            x: 800, y: 510,
+            panelReady: true,
+            panelMinX: panelMinX, panelMinY: panelMinY, panelMaxX: panelMaxX, panelMaxY: panelMaxY,
+            anchorMinX: tileMin, anchorMinY: 460, anchorMaxX: tileMax, anchorMaxY: 540
+        ))
+
         let created = FolderEditing.group(
             layout: Layout(pages: [["a", "b", "c", "d"]], metrics: twoByTwo),
             draggedAppID: "b",
@@ -526,6 +551,27 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(dropped.folders[0].appIDs, ["a", "d", "b"])
         XCTAssertEqual(dropped.orderedIDs.filter { $0 == "d" }.count, 1)
         XCTAssertFalse(dropped.pages.flatMap { $0.map(\.id) }.contains("d"))
+
+        var outside = HeldDrag()
+        outside.beginGrid(appID: "d", origin: created)
+        outside.beginInsertion(folderID: folderID, index: 1)
+        outside.leaveInsertion()
+        XCTAssertEqual(outside.resolveHoverRelease(insideContent: false), .reorder)
+        XCTAssertEqual(outside.resolveHoverRelease(insideContent: true), .none)
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+
+        var withdrawn = HeldDrag()
+        withdrawn.beginGrid(appID: "d", origin: created)
+        withdrawn.beginInsertion(folderID: folderID, index: 1)
+        XCTAssertEqual(withdrawn.resolveHoverRelease(insideContent: false), .reorder)
+        XCTAssertEqual(created.folders[0].appIDs, ["a", "b"])
+        XCTAssertEqual(withdrawn.complete(), .none)
+
+        var placed = HeldDrag()
+        placed.beginGrid(appID: "d", origin: created)
+        placed.beginInsertion(folderID: folderID, index: 1)
+        XCTAssertEqual(placed.resolveHoverRelease(insideContent: true), .insert(appID: "d", folderID: folderID, index: 1))
+        XCTAssertEqual(placed.complete(), .none)
     }
 
     func testEscapeCancelsTheDragBeforeItChangesTheFolderOrTheGrid() {
