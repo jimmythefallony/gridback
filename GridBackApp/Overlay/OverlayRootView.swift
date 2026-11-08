@@ -106,7 +106,7 @@ struct OverlayRootView: View {
                         gridChromeVisible: $gridChromeVisible,
                         iconFrames: $folderIconFrames,
                         panelFrame: $folderPanel,
-                        hiddenID: folderDragID ?? (insertingIntoFolder == folderID ? reorder?.appID : nil)
+                        hiddenID: model.heldDrag.heldAppID
                     )
                 }
 
@@ -149,6 +149,11 @@ struct OverlayRootView: View {
                     visualPage = CGFloat(newPage)
                 }
             }
+            .onChange(of: model.heldDrag.suppressCommit) { _, suppressed in
+                if suppressed {
+                    abandonDragVisuals()
+                }
+            }
             .onChange(of: model.openFolderID) { _, id in
                 if id == nil {
                     gridChromeVisible = true
@@ -180,7 +185,9 @@ struct OverlayRootView: View {
                     hiddenID: reorder?.appID,
                     hiddenFolderID: model.openFolderID,
                     armedID: highlightTarget,
-                    blockLaunch: blockLaunch
+                    blockLaunch: blockLaunch,
+                    displayFolders: (reorder?.preview ?? model.layout).folders,
+                    suppressedAppID: model.heldDrag.heldAppID
                 )
             }
         }
@@ -222,20 +229,28 @@ struct OverlayRootView: View {
                     highlightTarget = nil
                     blockLaunch = true
                     armClock.start()
+                    dragSettled = false
+                    model.beginHeldGridDrag(appID: id)
                 }
                 dragLayout = layout
                 finger = value.location
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
-                if let folderID = insertingIntoFolder, let reorder {
-                    model.commitFolderInsert(appID: reorder.appID, folderID: folderID, index: insertIndex)
-                    self.reorder = nil
-                    insertingIntoFolder = nil
-                    holdOpen.reset()
-                    armClock.stop()
-                    clearArmedDrag()
+                if model.heldDrag.suppressCommit {
+                    abandonDragVisuals()
                     return
+                }
+                switch model.completeHeldDrag() {
+                case .none:
+                    abandonDragVisuals()
+                    return
+                case .insert(let appID, let folderID, let index):
+                    model.commitFolderInsert(appID: appID, folderID: folderID, index: index)
+                    abandonDragVisuals()
+                    return
+                case .reorder:
+                    break
                 }
                 if folderDragID != nil && !folderHandoff {
                     clearFolderDrag()
@@ -335,6 +350,7 @@ struct OverlayRootView: View {
                 armedTarget = nil
                 highlightTarget = nil
                 holdDismiss = false
+                model.beginHeldInsertion(folderID: folderID, index: 0)
                 model.openFolder(folderID)
             }
         }
@@ -365,6 +381,7 @@ struct OverlayRootView: View {
             slotCount: folder.appIDs.count + (folder.appIDs.contains(appID) ? 0 : 1),
             open: metrics
         )
+        model.updateHeldInsertion(index: insertIndex)
     }
 
     private func exitHoldOpen(at point: CGPoint, layout: LaunchGridLayout) {
@@ -463,8 +480,10 @@ struct OverlayRootView: View {
 
     private func trackFolderDrag(_ value: DragGesture.Value, layout: LaunchGridLayout) {
         if folderDragID == nil {
-            guard let id = folderIconFrames.first(where: { $0.value.contains(value.startLocation) })?.key else { return }
+            guard let folder = model.layout.folder(model.openFolderID ?? ""),
+                  let id = folderAppID(at: value.startLocation, folder: folder, layout: layout) else { return }
             folderDragID = id
+            model.beginHeldFolderDrag(appID: id, folderID: folder.id)
             dragSettled = false
             blockLaunch = true
             pointerHandoff.onMove = { [self] point in
@@ -506,12 +525,41 @@ struct OverlayRootView: View {
         let slot = layout.insertionSlot(x: Double(point.x), y: Double(point.y), itemCount: count) ?? count
         let extracted = FolderEditing.moveAppOut(layout: model.layout, appID: id, toPage: page, toSlot: slot)
         folderHandoff = true
+        model.noteHeldExtracted()
         reorder = GridReorderSession(appID: id, layout: extracted, page: page)
         updateReorder(at: point, layout: layout)
     }
 
+    private func abandonDragVisuals() {
+        pointerHandoff.stop()
+        reorder = nil
+        folderDragID = nil
+        folderHandoff = false
+        insertingIntoFolder = nil
+        dragSettled = true
+        armClock.stop()
+        clearArmedDrag()
+    }
+
+    private func folderAppID(at point: CGPoint, folder: AppFolder, layout: LaunchGridLayout) -> String? {
+        guard folderPanel != .zero else { return nil }
+        let metrics = Self.folderMetrics(layout: layout, appCount: folder.appIDs.count)
+        return FolderPanelMetrics.hitAppID(
+            localX: Double(point.x) - Double(folderPanel.minX),
+            localY: Double(point.y) - Double(folderPanel.minY),
+            ids: folder.appIDs,
+            tileSide: layout.iconSide,
+            open: metrics
+        )
+    }
+
     private func finishHandoff() {
         guard folderHandoff, !dragSettled else { return }
+        if model.heldDrag.suppressCommit {
+            abandonDragVisuals()
+            return
+        }
+        _ = model.completeHeldDrag()
         dragSettled = true
         pointerHandoff.stop()
         if let reorder {

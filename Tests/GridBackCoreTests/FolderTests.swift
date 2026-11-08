@@ -475,4 +475,93 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 60, localY: 20, slotCount: 4, open: metrics), 1)
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 250, localY: 20, slotCount: 4, open: metrics), 3)
     }
+
+    func testEscapeCancelsTheDragBeforeItChangesTheFolderOrTheGrid() {
+        let metrics = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 800,
+            appCount: 2
+        )
+        let second = FolderPanelMetrics.iconBox(index: 1, appCount: 2, progress: 1, tileSide: 64, open: metrics)
+        let first = FolderPanelMetrics.iconBox(index: 0, appCount: 2, progress: 1, tileSide: 64, open: metrics)
+        XCTAssertEqual(
+            FolderPanelMetrics.hitAppID(localX: second.centerX, localY: second.centerY, ids: ["voice", "dictionary"], tileSide: 64, open: metrics),
+            "dictionary"
+        )
+        XCTAssertEqual(
+            FolderPanelMetrics.hitAppID(localX: first.centerX, localY: first.centerY, ids: ["voice", "dictionary"], tileSide: 64, open: metrics),
+            "voice"
+        )
+        XCTAssertNil(
+            FolderPanelMetrics.hitAppID(localX: 0, localY: 0, ids: ["voice", "dictionary"], tileSide: 64, open: metrics)
+        )
+
+        let origin = FolderEditing.group(
+            layout: Layout(pages: [["voice", "dictionary", "notes"]], metrics: twoByTwo),
+            draggedAppID: "dictionary",
+            targetID: "voice"
+        )
+        let folderID = origin.folders[0].id
+        XCTAssertEqual(origin.folders[0].appIDs, ["voice", "dictionary"])
+
+        func escape(_ drag: inout HeldDrag, folderIsOpen: Bool) -> OverlayCommand {
+            OverlayCommanding.command(
+                keyCode: 53,
+                characters: "",
+                modifiers: [],
+                isSearching: false,
+                folderIsOpen: folderIsOpen,
+                columns: 2,
+                drag: &drag
+            )
+        }
+
+        var grid = HeldDrag()
+        grid.beginGrid(appID: "notes", origin: origin)
+        guard case .cancelDrag(let gridCancel) = escape(&grid, folderIsOpen: false) else {
+            return XCTFail("grid drag did not cancel")
+        }
+        XCTAssertEqual(gridCancel.origin.folders[0].appIDs, ["voice", "dictionary"])
+        XCTAssertFalse(gridCancel.closeTransientFolder)
+        XCTAssertEqual(grid.complete(), .none)
+        XCTAssertEqual(escape(&grid, folderIsOpen: false), .key(.dismiss))
+
+        var inside = HeldDrag()
+        inside.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        XCTAssertEqual(inside.heldAppID, "dictionary")
+        guard case .cancelDrag(let insideCancel) = escape(&inside, folderIsOpen: true) else {
+            return XCTFail("folder drag did not cancel")
+        }
+        XCTAssertFalse(insideCancel.closeTransientFolder)
+        XCTAssertEqual(insideCancel.origin.folders[0].appIDs, ["voice", "dictionary"])
+        XCTAssertEqual(inside.complete(), .none)
+        XCTAssertEqual(escape(&inside, folderIsOpen: true), .key(.closeFolder))
+
+        var extracted = HeldDrag()
+        extracted.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        extracted.markExtracted()
+        extracted.beginInsertion(folderID: folderID, index: 0)
+        guard case .cancelDrag(let transition) = escape(&extracted, folderIsOpen: true) else {
+            return XCTFail("extraction did not cancel")
+        }
+        XCTAssertTrue(transition.closeTransientFolder)
+        XCTAssertEqual(transition.origin.orderedIDs.filter { $0 == "dictionary" }.count, 1)
+        XCTAssertEqual(transition.origin.folders[0].appIDs, ["voice", "dictionary"])
+        XCTAssertEqual(extracted.complete(), .none)
+
+        var inserted = HeldDrag()
+        inserted.beginGrid(appID: "notes", origin: origin)
+        inserted.beginInsertion(folderID: folderID, index: 1)
+        XCTAssertEqual(inserted.complete(), .insert(appID: "notes", folderID: folderID, index: 1))
+        var dropped = HeldDrag()
+        dropped.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        dropped.markExtracted()
+        XCTAssertEqual(dropped.heldAppID, "dictionary")
+        XCTAssertEqual(dropped.complete(), .reorder)
+    }
 }

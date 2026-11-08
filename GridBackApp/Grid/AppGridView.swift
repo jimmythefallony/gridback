@@ -10,6 +10,8 @@ struct AppGridView: View {
     var hiddenFolderID: String?
     var armedID: String?
     var blockLaunch: Bool
+    var displayFolders: [AppFolder]? = nil
+    var suppressedAppID: String? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -61,10 +63,10 @@ struct AppGridView: View {
                 }
             }
         case .folder(let id):
-            let folder = model.layout.folder(id)
+            let folder = (displayFolders ?? model.layout.folders).first { $0.id == id } ?? model.layout.folder(id)
             FolderTile(
                 name: folder?.name ?? AppFolder.defaultName,
-                icons: (folder?.appIDs ?? []).prefix(9).map { model.iconImages[$0] },
+                icons: (folder?.appIDs ?? []).filter { $0 != suppressedAppID }.prefix(9).map { model.iconImages[$0] },
                 iconSide: layout.iconSide,
                 labelWidth: max(layout.hitWidth - 12, layout.iconSide),
                 armed: armed

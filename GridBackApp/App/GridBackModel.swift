@@ -22,6 +22,7 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var isOverlayVisible = false
     @Published private(set) var launchError: String?
     @Published private(set) var shortcut: ShortcutChord
+    @Published var heldDrag = HeldDrag()
     @Published private(set) var hotkeyFailure: String?
     @Published private(set) var persistenceWarning: String?
     @Published private(set) var isRecordingShortcut = false
@@ -142,14 +143,66 @@ final class GridBackModel: ObservableObject {
 
     func handleKeyDown(keyCode: UInt16, characters: String, modifiers: KeyModifiers) -> Bool {
         guard isOverlayVisible else { return false }
-        let action = SearchKeyRouting.action(
+        var drag = heldDrag
+        let command = OverlayCommanding.command(
             keyCode: keyCode,
             characters: characters,
             modifiers: modifiers,
             isSearching: isSearching,
+            folderIsOpen: openFolderID != nil,
             columns: layout.metrics.columns,
-            folderIsOpen: openFolderID != nil
+            drag: &drag
         )
+        heldDrag = drag
+        switch command {
+        case .cancelDrag(let cancellation):
+            if cancellation.closeTransientFolder {
+                closeFolder()
+            }
+            return true
+        case .key(let action):
+            return apply(action)
+        }
+    }
+
+    func beginHeldGridDrag(appID: String) {
+        var drag = heldDrag
+        drag.beginGrid(appID: appID, origin: layout)
+        heldDrag = drag
+    }
+
+    func beginHeldFolderDrag(appID: String, folderID: String) {
+        var drag = heldDrag
+        drag.pickInsideFolder(appID: appID, folderID: folderID, origin: layout)
+        heldDrag = drag
+    }
+
+    func noteHeldExtracted() {
+        var drag = heldDrag
+        drag.markExtracted()
+        heldDrag = drag
+    }
+
+    func beginHeldInsertion(folderID: String, index: Int) {
+        var drag = heldDrag
+        drag.beginInsertion(folderID: folderID, index: index)
+        heldDrag = drag
+    }
+
+    func updateHeldInsertion(index: Int) {
+        var drag = heldDrag
+        drag.updateInsertion(index: index)
+        heldDrag = drag
+    }
+
+    func completeHeldDrag() -> HeldDrag.Outcome {
+        var drag = heldDrag
+        let outcome = drag.complete()
+        heldDrag = drag
+        return outcome
+    }
+
+    private func apply(_ action: SearchKeyAction) -> Bool {
         switch action {
         case .startOrAppend(let text):
             searchQuery.append(text)

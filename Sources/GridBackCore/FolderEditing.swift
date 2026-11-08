@@ -200,6 +200,31 @@ public enum FolderPanelMetrics {
             side: mini + (open.iconSide - mini) * t
         )
     }
+
+    /// The app whose square contains the point. Overlapping squares use the closer center.
+    /// A miss returns nil so the first app in the folder is not chosen by default.
+    public static func hitAppID(
+        localX: Double,
+        localY: Double,
+        ids: [String],
+        tileSide: Double,
+        open: FolderOpenMetrics,
+        progress: Double = 1
+    ) -> String? {
+        var best: (id: String, distance: Double)?
+        for (index, id) in ids.enumerated() {
+            let box = iconBox(index: index, appCount: ids.count, progress: progress, tileSide: tileSide, open: open)
+            let dx = localX - box.centerX
+            let dy = localY - box.centerY
+            let half = box.side / 2
+            guard abs(dx) <= half, abs(dy) <= half else { continue }
+            let distance = dx * dx + dy * dy
+            if best == nil || distance < best!.distance {
+                best = (id, distance)
+            }
+        }
+        return best?.id
+    }
 }
 
 public enum FolderHoldOpen {
@@ -245,6 +270,151 @@ public enum FolderHoldOpen {
             }
             return .waiting(targetID: targetID, elapsed: elapsed)
         }
+    }
+}
+
+/// One in-flight drag. The saved layout stays put until a drop commits it.
+/// Escape ends the drag and makes the following mouse-up a no-op.
+public struct HeldDrag: Equatable, Sendable {
+    public enum Phase: Equatable, Sendable {
+        case idle
+        case grid(appID: String)
+        case insideFolder(appID: String, folderID: String)
+        case extracted(appID: String, folderID: String)
+        case inserting(appID: String, folderID: String, index: Int)
+    }
+
+    public enum Outcome: Equatable, Sendable {
+        case none
+        case reorder
+        case insert(appID: String, folderID: String, index: Int)
+    }
+
+    public struct Cancellation: Equatable, Sendable {
+        public var origin: Layout
+        public var closeTransientFolder: Bool
+    }
+
+    public private(set) var phase: Phase = .idle
+    public private(set) var suppressCommit = false
+    private var origin: Layout?
+
+    public init() {}
+
+    public var isActive: Bool { phase != .idle }
+
+    public var heldAppID: String? {
+        switch phase {
+        case .idle:
+            return nil
+        case .grid(let appID), .insideFolder(let appID, _), .extracted(let appID, _), .inserting(let appID, _, _):
+            return appID
+        }
+    }
+
+    public var originLayout: Layout? { origin }
+
+    public mutating func beginGrid(appID: String, origin: Layout) {
+        suppressCommit = false
+        self.origin = origin
+        phase = .grid(appID: appID)
+    }
+
+    public mutating func pickInsideFolder(appID: String, folderID: String, origin: Layout) {
+        suppressCommit = false
+        self.origin = origin
+        phase = .insideFolder(appID: appID, folderID: folderID)
+    }
+
+    public mutating func markExtracted() {
+        guard case .insideFolder(let appID, let folderID) = phase else { return }
+        phase = .extracted(appID: appID, folderID: folderID)
+    }
+
+    public mutating func beginInsertion(folderID: String, index: Int) {
+        let appID: String
+        switch phase {
+        case .grid(let id), .extracted(let id, _):
+            appID = id
+        default:
+            return
+        }
+        phase = .inserting(appID: appID, folderID: folderID, index: index)
+    }
+
+    public mutating func updateInsertion(index: Int) {
+        guard case .inserting(let appID, let folderID, _) = phase else { return }
+        phase = .inserting(appID: appID, folderID: folderID, index: index)
+    }
+
+    /// Ends the drag without a commit. A later `complete` returns `.none`.
+    public mutating func escape() -> Cancellation? {
+        guard let origin, phase != .idle else { return nil }
+        let closeTransientFolder: Bool
+        if case .inserting = phase {
+            closeTransientFolder = true
+        } else {
+            closeTransientFolder = false
+        }
+        phase = .idle
+        suppressCommit = true
+        self.origin = nil
+        return Cancellation(origin: origin, closeTransientFolder: closeTransientFolder)
+    }
+
+    public mutating func complete() -> Outcome {
+        if suppressCommit {
+            return .none
+        }
+        if phase == .idle {
+            return .none
+        }
+        let outcome: Outcome
+        switch phase {
+        case .idle:
+            outcome = .none
+        case .grid, .extracted:
+            outcome = .reorder
+        case .insideFolder:
+            outcome = .none
+        case .inserting(let appID, let folderID, let index):
+            outcome = .insert(appID: appID, folderID: folderID, index: index)
+        }
+        phase = .idle
+        origin = nil
+        return outcome
+    }
+}
+
+public enum OverlayCommand: Equatable, Sendable {
+    case cancelDrag(HeldDrag.Cancellation)
+    case key(SearchKeyAction)
+}
+
+public enum OverlayCommanding {
+    /// Escape cancels an active drag before search, folder, or grid dismissal.
+    public static func command(
+        keyCode: UInt16,
+        characters: String,
+        modifiers: KeyModifiers,
+        isSearching: Bool,
+        folderIsOpen: Bool,
+        columns: Int,
+        drag: inout HeldDrag
+    ) -> OverlayCommand {
+        if keyCode == SearchKeyRouting.escapeKeyCode && !modifiers.isCommandChord, let cancellation = drag.escape() {
+            return .cancelDrag(cancellation)
+        }
+        return .key(
+            SearchKeyRouting.action(
+                keyCode: keyCode,
+                characters: characters,
+                modifiers: modifiers,
+                isSearching: isSearching,
+                columns: columns,
+                folderIsOpen: folderIsOpen
+            )
+        )
     }
 }
 
