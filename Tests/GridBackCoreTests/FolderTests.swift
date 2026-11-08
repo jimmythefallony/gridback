@@ -257,6 +257,18 @@ final class FolderTests: XCTestCase {
         XCTAssertNil(FolderEditing.createdFolderID(before: created, after: added))
     }
 
+    func testOpenPanelScalesUniformlyToTheFolderTile() {
+        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 320, panelHeight: 160, tileSide: 80), 0.25, accuracy: 0.0001)
+        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 100, panelHeight: 200, tileSide: 80), 0.4, accuracy: 0.0001)
+        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 40, panelHeight: 40, tileSide: 80), 1, accuracy: 0.0001)
+        let midpoint = FolderReveal.center(fromTileX: 10, fromTileY: 30, toRestX: 110, toRestY: 230, progress: 0.5)
+        XCTAssertEqual(midpoint.x, 60, accuracy: 0.0001)
+        XCTAssertEqual(midpoint.y, 130, accuracy: 0.0001)
+        let start = FolderReveal.center(fromTileX: 10, fromTileY: 30, toRestX: 110, toRestY: 230, progress: 0)
+        XCTAssertEqual(start.x, 10, accuracy: 0.0001)
+        XCTAssertEqual(start.y, 30, accuracy: 0.0001)
+    }
+
     func testLeavingThePanelRequiresTheHysteresisMargin() {
         let inside = FolderPanelExit.hasLeft(x: 200, y: 200, minX: 100, minY: 100, maxX: 300, maxY: 300)
         let barelyOutside = FolderPanelExit.hasLeft(x: 310, y: 200, minX: 100, minY: 100, maxX: 300, maxY: 300)

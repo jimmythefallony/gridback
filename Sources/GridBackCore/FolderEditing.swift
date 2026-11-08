@@ -53,6 +53,30 @@ public enum FolderDrop {
     }
 }
 
+public enum FolderReveal {
+    /// One scale for both axes, so the open panel's long side matches the folder tile.
+    /// A zero size leaves the panel unscaled instead of collapsing it to nothing.
+    public static func uniformScale(panelWidth: Double, panelHeight: Double, tileSide: Double) -> Double {
+        let span = max(panelWidth, panelHeight)
+        guard span > 1, tileSide > 0 else { return 1 }
+        return min(1, tileSide / span)
+    }
+
+    /// Straight-line center. The same progress moves both axes, so the path does not arc.
+    public static func center(
+        fromTileX: Double,
+        fromTileY: Double,
+        toRestX: Double,
+        toRestY: Double,
+        progress: Double
+    ) -> (x: Double, y: Double) {
+        (
+            x: fromTileX + (toRestX - fromTileX) * progress,
+            y: fromTileY + (toRestY - fromTileY) * progress
+        )
+    }
+}
+
 public enum FolderPanelExit {
     /// The pointer must clear the panel by this many points, so a small move inside does not pull the app out.
     public static let hysteresis: Double = 24

@@ -22,6 +22,7 @@ struct OverlayRootView: View {
     @State private var dragSettled = false
     @State private var folderPanel = CGRect.zero
     @State private var folderIconFrames: [String: CGRect] = [:]
+    @State private var gridChromeVisible = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -44,39 +45,44 @@ struct OverlayRootView: View {
                         }
                     }
 
-                if model.isScanning && model.appsByID.isEmpty {
-                    Text(String(localized: "Looking for apps…"))
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                } else if pages.isEmpty && !model.isSearching {
-                    Text(String(localized: "No apps found in Applications, System Applications, or your home Applications folder."))
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 520)
-                } else if model.isSearching {
-                    SearchResultsView(model: model, layout: chrome)
-                        .padding(.top, chrome.topChrome)
-                        .padding(.bottom, chrome.bottomChrome)
-                        .padding(.leading, chrome.originX)
-                        .padding(.trailing, max(0, chrome.pageWidth - chrome.originX - chrome.gridWidth))
-                } else {
-                    pageStrip(pages: pages, layout: chrome)
-                        .frame(width: chrome.pageWidth, height: chrome.gridHeight)
-                        .position(
-                            x: overlay.size.width / 2,
-                            y: chrome.originY + chrome.gridHeight / 2
-                        )
+                Group {
+                    if model.isScanning && model.appsByID.isEmpty {
+                        Text(String(localized: "Looking for apps…"))
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                    } else if pages.isEmpty && !model.isSearching {
+                        Text(String(localized: "No apps found in Applications, System Applications, or your home Applications folder."))
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 520)
+                    } else if model.isSearching {
+                        SearchResultsView(model: model, layout: chrome)
+                            .padding(.top, chrome.topChrome)
+                            .padding(.bottom, chrome.bottomChrome)
+                            .padding(.leading, chrome.originX)
+                            .padding(.trailing, max(0, chrome.pageWidth - chrome.originX - chrome.gridWidth))
+                    } else {
+                        pageStrip(pages: pages, layout: chrome)
+                            .frame(width: chrome.pageWidth, height: chrome.gridHeight)
+                            .position(
+                                x: overlay.size.width / 2,
+                                y: chrome.originY + chrome.gridHeight / 2
+                            )
+                    }
                 }
+                .opacity(gridChromeVisible ? 1 : 0)
 
                 SearchPill(query: searchQueryBinding)
                     .position(x: chrome.contentCenterX, y: chrome.searchCenterY)
+                    .opacity(gridChromeVisible ? 1 : 0)
 
                 if !model.isSearching && !pages.isEmpty {
                     PageControls(pageCount: pages.count, position: visualPage) { page in
                         turnToPage(page)
                     }
                     .position(x: chrome.contentCenterX, y: chrome.pageControlCenterY)
+                    .opacity(gridChromeVisible ? 1 : 0)
                 }
 
                 if let folderID = model.openFolderID, let folder = model.layout.folder(folderID) {
@@ -88,6 +94,7 @@ struct OverlayRootView: View {
                         reduceMotion: reduceMotion,
                         collapse: folderHandoff,
                         suppressLaunch: blockLaunch,
+                        gridChromeVisible: $gridChromeVisible,
                         iconFrames: $folderIconFrames,
                         panelFrame: $folderPanel,
                         hiddenID: folderDragID
@@ -131,6 +138,11 @@ struct OverlayRootView: View {
                 guard !isSwiping, !suppressPageAnimation else { return }
                 withAnimation(.easeOut(duration: 0.35)) {
                     visualPage = CGFloat(newPage)
+                }
+            }
+            .onChange(of: model.openFolderID) { _, id in
+                if id == nil {
+                    gridChromeVisible = true
                 }
             }
         }
@@ -416,9 +428,10 @@ struct OverlayRootView: View {
         }
         let pageLeft = overlaySize.width / 2 - layout.pageWidth / 2
         let pageTop = layout.originY
+        let iconLift = (layout.labelHeight + layout.iconLabelGap) / 2
         return CGPoint(
             x: pageLeft + layout.originX + layout.columnCenter(path.slot),
-            y: pageTop + layout.rowCenter(path.slot)
+            y: pageTop + layout.rowCenter(path.slot) - iconLift
         )
     }
 
@@ -534,88 +547,124 @@ private struct FolderCover: View {
     var reduceMotion: Bool
     var collapse: Bool
     var suppressLaunch: Bool
+    @Binding var gridChromeVisible: Bool
     @Binding var iconFrames: [String: CGRect]
     @Binding var panelFrame: CGRect
     var hiddenID: String?
     @State private var name: String = ""
     @State private var revealed = false
+    @State private var titleShown = false
     @State private var closing = false
+    @State private var cardSize: CGSize = .zero
     @FocusState private var nameFocused: Bool
 
     var body: some View {
         GeometryReader { overlay in
             let center = CGPoint(x: overlay.size.width / 2, y: overlay.size.height / 2)
+            let progress = revealed ? 1.0 : 0.0
+            let resting = FolderReveal.center(
+                fromTileX: tileCenter.x,
+                fromTileY: tileCenter.y,
+                toRestX: center.x,
+                toRestY: center.y,
+                progress: progress
+            )
+            let closed = FolderReveal.uniformScale(
+                panelWidth: cardSize.width,
+                panelHeight: cardSize.height,
+                tileSide: layout.iconSide
+            )
+            let scale = closed + (1 - closed) * progress
             ZStack {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(revealed ? 1 : 0)
-                    .ignoresSafeArea()
-                Color.black.opacity(revealed ? 0.38 : 0)
+                Color.clear
+                    .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture { beginClose() }
-                panel
-                    .scaleEffect(revealed ? 1 : 0.16, anchor: .center)
-                    .position(revealed ? center : tileCenter)
+                card
+                    .scaleEffect(cardSize.width > 1 ? scale : 1, anchor: .center)
+                    .position(x: resting.x, y: resting.y)
+                    .opacity(cardSize.width > 1 ? 1 : 0)
+                title
+                    .position(x: center.x, y: center.y - cardSize.height / 2 - 28)
+                    .opacity(titleShown ? 1 : 0)
             }
             .allowsHitTesting(!collapse)
         }
         .onChange(of: collapse) { _, shouldCollapse in
             if shouldCollapse { beginClose() }
         }
-        .onAppear {
-            name = folder.name
+        .onAppear { name = folder.name }
+        .onPreferenceChange(FolderCardSizeKey.self) { size in
+            guard size.width > 1, cardSize == .zero else { return }
+            cardSize = size
+            guard !closing else { return }
             if reduceMotion {
                 revealed = true
-            } else {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                    revealed = true
-                }
+                titleShown = true
+                gridChromeVisible = false
+            }
+        }
+        .onChange(of: cardSize) { _, size in
+            guard size.width > 1, !revealed, !closing, !reduceMotion else { return }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
+                revealed = true
+            }
+            withAnimation(.easeOut(duration: 0.24)) {
+                titleShown = true
+                gridChromeVisible = false
             }
         }
     }
 
-    private var panel: some View {
-        VStack(spacing: 18) {
-            TextField(AppFolder.defaultName, text: $name)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: 280)
-                .focused($nameFocused)
-                .onSubmit { commitName() }
-                .onDisappear { commitName() }
-            let columns = min(max(folder.appIDs.count, 1), 4)
-            LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
-                ForEach(folder.appIDs, id: \.self) { id in
-                    AppIconButton(
-                        title: model.appsByID[id]?.displayName ?? id,
-                        image: model.iconImages[id],
-                        iconSide: layout.iconSide,
-                        labelWidth: layout.iconSide + 24
-                    ) {
-                        guard hiddenID == nil, !suppressLaunch else { return }
-                        model.launch(id: id)
-                    }
-                    .opacity(id == hiddenID ? 0 : 1)
-                    .background {
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: FolderIconFramesKey.self,
-                                value: [id: geo.frame(in: .named("overlay"))]
-                            )
-                        }
+    private var title: some View {
+        TextField(AppFolder.defaultName, text: $name)
+            .textFieldStyle(.plain)
+            .multilineTextAlignment(.center)
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+            .frame(maxWidth: 280)
+            .focused($nameFocused)
+            .onSubmit { commitName() }
+            .onDisappear { commitName() }
+    }
+
+    private var card: some View {
+        let columns = min(max(folder.appIDs.count, 1), 4)
+        return LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
+            ForEach(folder.appIDs, id: \.self) { id in
+                AppIconButton(
+                    title: model.appsByID[id]?.displayName ?? id,
+                    image: model.iconImages[id],
+                    iconSide: layout.iconSide,
+                    labelWidth: layout.iconSide + 24
+                ) {
+                    guard hiddenID == nil, !suppressLaunch else { return }
+                    model.launch(id: id)
+                }
+                .opacity(id == hiddenID ? 0 : 1)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: FolderIconFramesKey.self,
+                            value: [id: geo.frame(in: .named("overlay"))]
+                        )
                     }
                 }
             }
         }
         .padding(28)
         .frame(minWidth: 320)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.white.opacity(0.24))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        }
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.45), lineWidth: 1)
         }
+        .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
         .background {
             GeometryReader { geo in
                 Color.clear.preference(
@@ -624,21 +673,29 @@ private struct FolderCover: View {
                 )
             }
         }
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(key: FolderCardSizeKey.self, value: geo.size)
+            }
+        }
         .onPreferenceChange(FolderIconFramesKey.self) { iconFrames = $0 }
         .onPreferenceChange(FolderPanelFrameKey.self) { panelFrame = $0 }
     }
 
     private func beginClose() {
         guard !closing else { return }
+        closing = true
         if reduceMotion {
+            gridChromeVisible = true
             model.closeFolder()
             return
         }
-        closing = true
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+        withAnimation(.easeIn(duration: 0.22)) {
             revealed = false
+            titleShown = false
+            gridChromeVisible = true
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             model.closeFolder()
         }
     }
@@ -653,6 +710,14 @@ private struct FolderIconFramesKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private struct FolderCardSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 
