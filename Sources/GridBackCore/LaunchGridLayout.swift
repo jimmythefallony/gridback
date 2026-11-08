@@ -141,3 +141,8 @@ public struct LaunchGridLayout: Equatable, Sendable {
         return (Double(row) + 0.5) * rowStride
     }
 }
+
+/// How neighboring icons slide when a drag changes their slots.
+public enum GridReorderMotion {
+    public static let displacedDuration: Double = 0.16
+}

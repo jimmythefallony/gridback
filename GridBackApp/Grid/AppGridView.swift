@@ -37,7 +37,7 @@ struct AppGridView: View {
             }
         }
         .frame(width: layout.pageWidth, height: layout.gridHeight)
-        .animation(.easeInOut(duration: 0.16), value: items)
+        .animation(.easeInOut(duration: GridReorderMotion.displacedDuration), value: items)
     }
 
     @ViewBuilder

@@ -477,6 +477,10 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 250, localY: 20, slotCount: 4, open: metrics), 3)
     }
 
+    func testFolderNeighborsUseTheSameSlideDurationAsTheGrid() {
+        XCTAssertEqual(GridReorderMotion.displacedDuration, 0.16, accuracy: 0.0001)
+    }
+
     func testHoverOpenStaysUntilThePointerLeavesBothTheTileAndThePanel() {
         let tileMin = 360.0
         let tileMax = 440.0

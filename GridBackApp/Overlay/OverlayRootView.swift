@@ -874,6 +874,10 @@ private struct FolderCover: View {
                     .opacity(id == hiddenID ? 0 : progress)
             }
         }
+        .animation(
+            reduceMotion || !revealed ? nil : .easeInOut(duration: GridReorderMotion.displacedDuration),
+            value: arrangedIDs
+        )
         .frame(width: shape.width, height: shape.height)
         .background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
