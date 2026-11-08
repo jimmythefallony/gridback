@@ -257,16 +257,71 @@ final class FolderTests: XCTestCase {
         XCTAssertNil(FolderEditing.createdFolderID(before: created, after: added))
     }
 
-    func testOpenPanelScalesUniformlyToTheFolderTile() {
-        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 320, panelHeight: 160, tileSide: 80), 0.25, accuracy: 0.0001)
-        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 100, panelHeight: 200, tileSide: 80), 0.4, accuracy: 0.0001)
-        XCTAssertEqual(FolderReveal.uniformScale(panelWidth: 40, panelHeight: 40, tileSide: 80), 1, accuracy: 0.0001)
-        let midpoint = FolderReveal.center(fromTileX: 10, fromTileY: 30, toRestX: 110, toRestY: 230, progress: 0.5)
-        XCTAssertEqual(midpoint.x, 60, accuracy: 0.0001)
-        XCTAssertEqual(midpoint.y, 130, accuracy: 0.0001)
-        let start = FolderReveal.center(fromTileX: 10, fromTileY: 30, toRestX: 110, toRestY: 230, progress: 0)
-        XCTAssertEqual(start.x, 10, accuracy: 0.0001)
-        XCTAssertEqual(start.y, 30, accuracy: 0.0001)
+    func testFolderShapeWidensFromTheSquareTileAndKeepsSideMargins() {
+        let wide = FolderPanelMetrics.openMetrics(overlayWidth: 1728, preferredIcon: 112, appCount: 2)
+        XCTAssertLessThanOrEqual(wide.width, FolderPanelMetrics.maxWidth)
+        XCTAssertGreaterThanOrEqual(wide.sideMargin, 1728 * FolderPanelMetrics.sideMarginFraction - 0.1)
+        XCTAssertEqual(wide.sideMargin, (1728 - wide.width) / 2, accuracy: 0.001)
+        XCTAssertGreaterThan(wide.width, wide.height)
+
+        let narrow = FolderPanelMetrics.openMetrics(overlayWidth: 640, preferredIcon: 96, appCount: 4)
+        XCTAssertLessThanOrEqual(narrow.width, 640 * (1 - FolderPanelMetrics.sideMarginFraction * 2) + 0.1)
+        XCTAssertGreaterThanOrEqual(narrow.sideMargin, 640 * FolderPanelMetrics.sideMarginFraction - 0.1)
+
+        let tileSide = 80.0
+        let closed = FolderPanelMetrics.shape(
+            progress: 0,
+            tileSide: tileSide,
+            tileCenterX: 40,
+            tileCenterY: 90,
+            open: wide,
+            openCenterX: 864,
+            openCenterY: 500
+        )
+        XCTAssertEqual(closed.width, tileSide, accuracy: 0.001)
+        XCTAssertEqual(closed.height, tileSide, accuracy: 0.001)
+        XCTAssertEqual(closed.aspectRatio, 1, accuracy: 0.001)
+        XCTAssertEqual(closed.centerX, 40, accuracy: 0.001)
+        XCTAssertEqual(closed.centerY, 90, accuracy: 0.001)
+        XCTAssertEqual(closed.cornerRadius, tileSide * FolderPanelMetrics.tileCornerFactor, accuracy: 0.001)
+
+        let opened = FolderPanelMetrics.shape(
+            progress: 1.4,
+            tileSide: tileSide,
+            tileCenterX: 40,
+            tileCenterY: 90,
+            open: wide,
+            openCenterX: 864,
+            openCenterY: 500
+        )
+        XCTAssertEqual(opened.width, wide.width, accuracy: 0.001)
+        XCTAssertEqual(opened.height, wide.height, accuracy: 0.001)
+        XCTAssertEqual(opened.centerX, 864, accuracy: 0.001)
+        XCTAssertEqual(opened.cornerRadius, FolderPanelMetrics.openCornerRadius, accuracy: 0.001)
+        XCTAssertNotEqual(opened.aspectRatio, 1, accuracy: 0.05)
+
+        let mid = FolderPanelMetrics.shape(
+            progress: 0.5,
+            tileSide: tileSide,
+            tileCenterX: 40,
+            tileCenterY: 90,
+            open: wide,
+            openCenterX: 864,
+            openCenterY: 500
+        )
+        XCTAssertEqual(mid.width, (tileSide + wide.width) / 2, accuracy: 0.001)
+        XCTAssertEqual(mid.height, (tileSide + wide.height) / 2, accuracy: 0.001)
+        XCTAssertNotEqual(mid.width / tileSide, mid.height / tileSide, accuracy: 0.05)
+        XCTAssertNotEqual(mid.aspectRatio, opened.aspectRatio, accuracy: 0.05)
+        XCTAssertNotEqual(mid.aspectRatio, 1, accuracy: 0.05)
+
+        let iconStart = FolderPanelMetrics.iconBox(index: 0, appCount: 2, progress: 0, tileSide: tileSide, open: wide)
+        let iconMid = FolderPanelMetrics.iconBox(index: 0, appCount: 2, progress: 0.5, tileSide: tileSide, open: wide)
+        let iconEnd = FolderPanelMetrics.iconBox(index: 0, appCount: 2, progress: 1, tileSide: tileSide, open: wide)
+        XCTAssertEqual(iconStart.side, tileSide / 3.6, accuracy: 0.001)
+        XCTAssertEqual(iconEnd.side, wide.iconSide, accuracy: 0.001)
+        XCTAssertEqual(iconMid.side, (iconStart.side + iconEnd.side) / 2, accuracy: 0.001)
+        XCTAssertGreaterThan(iconEnd.side, iconStart.side)
     }
 
     func testLeavingThePanelRequiresTheHysteresisMargin() {

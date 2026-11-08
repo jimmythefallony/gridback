@@ -7,6 +7,7 @@ struct AppGridView: View {
     var layout: LaunchGridLayout
     var items: [GridBackCore.GridItem]
     var hiddenID: String?
+    var hiddenFolderID: String?
     var armedID: String?
     var blockLaunch: Bool
 
@@ -24,7 +25,7 @@ struct AppGridView: View {
                     }
                 }
             ForEach(Array(items.enumerated()), id: \.element.id) { slot, item in
-                if item.id != hiddenID {
+                if item.id != hiddenID && item.id != hiddenFolderID {
                     tile(item, slot: slot)
                         .position(
                             x: layout.originX + layout.columnCenter(slot),

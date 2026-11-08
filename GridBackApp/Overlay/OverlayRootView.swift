@@ -167,6 +167,7 @@ struct OverlayRootView: View {
                     layout: layout,
                     items: pages[index],
                     hiddenID: reorder?.appID,
+                    hiddenFolderID: model.openFolderID,
                     armedID: highlightTarget,
                     blockLaunch: blockLaunch
                 )
@@ -555,37 +556,35 @@ private struct FolderCover: View {
     @State private var revealed = false
     @State private var titleShown = false
     @State private var closing = false
-    @State private var cardSize: CGSize = .zero
     @FocusState private var nameFocused: Bool
 
     var body: some View {
         GeometryReader { overlay in
             let center = CGPoint(x: overlay.size.width / 2, y: overlay.size.height / 2)
+            let metrics = FolderPanelMetrics.openMetrics(
+                overlayWidth: overlay.size.width,
+                preferredIcon: layout.iconSide,
+                appCount: folder.appIDs.count
+            )
             let progress = revealed ? 1.0 : 0.0
-            let resting = FolderReveal.center(
-                fromTileX: tileCenter.x,
-                fromTileY: tileCenter.y,
-                toRestX: center.x,
-                toRestY: center.y,
-                progress: progress
+            let shape = FolderPanelMetrics.shape(
+                progress: progress,
+                tileSide: layout.iconSide,
+                tileCenterX: tileCenter.x,
+                tileCenterY: tileCenter.y,
+                open: metrics,
+                openCenterX: center.x,
+                openCenterY: center.y
             )
-            let closed = FolderReveal.uniformScale(
-                panelWidth: cardSize.width,
-                panelHeight: cardSize.height,
-                tileSide: layout.iconSide
-            )
-            let scale = closed + (1 - closed) * progress
             ZStack {
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture { beginClose() }
-                card
-                    .scaleEffect(cardSize.width > 1 ? scale : 1, anchor: .center)
-                    .position(x: resting.x, y: resting.y)
-                    .opacity(cardSize.width > 1 ? 1 : 0)
+                card(metrics: metrics, shape: shape, progress: progress)
+                    .position(x: shape.centerX, y: shape.centerY)
                 title
-                    .position(x: center.x, y: center.y - cardSize.height / 2 - 28)
+                    .position(x: center.x, y: center.y - metrics.height / 2 - 28)
                     .opacity(titleShown ? 1 : 0)
             }
             .allowsHitTesting(!collapse)
@@ -593,25 +592,21 @@ private struct FolderCover: View {
         .onChange(of: collapse) { _, shouldCollapse in
             if shouldCollapse { beginClose() }
         }
-        .onAppear { name = folder.name }
-        .onPreferenceChange(FolderCardSizeKey.self) { size in
-            guard size.width > 1, cardSize == .zero else { return }
-            cardSize = size
+        .onAppear {
+            name = folder.name
             guard !closing else { return }
             if reduceMotion {
                 revealed = true
                 titleShown = true
                 gridChromeVisible = false
-            }
-        }
-        .onChange(of: cardSize) { _, size in
-            guard size.width > 1, !revealed, !closing, !reduceMotion else { return }
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
-                revealed = true
-            }
-            withAnimation(.easeOut(duration: 0.24)) {
-                titleShown = true
-                gridChromeVisible = false
+            } else {
+                withAnimation(.easeOut(duration: 0.42)) {
+                    revealed = true
+                }
+                withAnimation(.easeOut(duration: 0.3)) {
+                    titleShown = true
+                    gridChromeVisible = false
+                }
             }
         }
     }
@@ -629,20 +624,27 @@ private struct FolderCover: View {
             .onDisappear { commitName() }
     }
 
-    private var card: some View {
-        let columns = min(max(folder.appIDs.count, 1), 4)
-        return LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(layout.iconSide + 36), spacing: 8), count: columns), spacing: 12) {
-            ForEach(folder.appIDs, id: \.self) { id in
-                AppIconButton(
-                    title: model.appsByID[id]?.displayName ?? id,
-                    image: model.iconImages[id],
-                    iconSide: layout.iconSide,
-                    labelWidth: layout.iconSide + 24
-                ) {
+    private func card(metrics: FolderOpenMetrics, shape: FolderContainerShape, progress: Double) -> some View {
+        let radius = shape.cornerRadius
+        return ZStack(alignment: .topLeading) {
+            ForEach(Array(folder.appIDs.enumerated()), id: \.element) { index, id in
+                let icon = FolderPanelMetrics.iconBox(
+                    index: index,
+                    appCount: folder.appIDs.count,
+                    progress: progress,
+                    tileSide: layout.iconSide,
+                    open: metrics
+                )
+                let shown = id != hiddenID && (index < 9 || progress > 0.01)
+                Button {
                     guard hiddenID == nil, !suppressLaunch else { return }
                     model.launch(id: id)
+                } label: {
+                    iconImage(model.iconImages[id], side: icon.side)
                 }
-                .opacity(id == hiddenID ? 0 : 1)
+                .buttonStyle(GridPlainButtonStyle())
+                .position(x: icon.centerX, y: icon.centerY)
+                .opacity(shown ? 1 : 0)
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(
@@ -651,19 +653,28 @@ private struct FolderCover: View {
                         )
                     }
                 }
+                Text(model.appsByID[id]?.displayName ?? id)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(width: max(icon.side + 12, 64))
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .position(x: icon.centerX, y: icon.centerY + icon.side / 2 + 18)
+                    .opacity(id == hiddenID ? 0 : progress)
             }
         }
-        .padding(28)
-        .frame(minWidth: 320)
+        .frame(width: shape.width, height: shape.height)
         .background {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(Color.white.opacity(0.24))
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.45), lineWidth: 1)
         }
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
         .background {
             GeometryReader { geo in
@@ -673,13 +684,24 @@ private struct FolderCover: View {
                 )
             }
         }
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(key: FolderCardSizeKey.self, value: geo.size)
-            }
-        }
         .onPreferenceChange(FolderIconFramesKey.self) { iconFrames = $0 }
         .onPreferenceChange(FolderPanelFrameKey.self) { panelFrame = $0 }
+    }
+
+    private func iconImage(_ image: NSImage?, side: Double) -> some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(systemName: "app.dashed")
+                    .font(.system(size: side * 0.55))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .frame(width: side, height: side)
     }
 
     private func beginClose() {
@@ -690,12 +712,15 @@ private struct FolderCover: View {
             model.closeFolder()
             return
         }
-        withAnimation(.easeIn(duration: 0.22)) {
+        let showGridWhileClosing = collapse
+        withAnimation(.easeInOut(duration: 0.46), completionCriteria: .logicallyComplete) {
             revealed = false
             titleShown = false
+            if showGridWhileClosing {
+                gridChromeVisible = true
+            }
+        } completion: {
             gridChromeVisible = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             model.closeFolder()
         }
     }
@@ -710,14 +735,6 @@ private struct FolderIconFramesKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { $1 })
-    }
-}
-
-private struct FolderCardSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        let next = nextValue()
-        if next != .zero { value = next }
     }
 }
 

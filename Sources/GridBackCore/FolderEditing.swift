@@ -53,26 +53,135 @@ public enum FolderDrop {
     }
 }
 
-public enum FolderReveal {
-    /// One scale for both axes, so the open panel's long side matches the folder tile.
-    /// A zero size leaves the panel unscaled instead of collapsing it to nothing.
-    public static func uniformScale(panelWidth: Double, panelHeight: Double, tileSide: Double) -> Double {
-        let span = max(panelWidth, panelHeight)
-        guard span > 1, tileSide > 0 else { return 1 }
-        return min(1, tileSide / span)
+public struct FolderOpenMetrics: Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+    public var iconSide: Double
+    public var sideMargin: Double
+    public var columns: Int
+}
+
+public struct FolderContainerShape: Equatable, Sendable {
+    public var centerX: Double
+    public var centerY: Double
+    public var width: Double
+    public var height: Double
+    public var cornerRadius: Double
+
+    public var aspectRatio: Double {
+        guard height > 0 else { return 1 }
+        return width / height
+    }
+}
+
+public struct FolderIconBox: Equatable, Sendable {
+    /// Center of the icon in the container's top-left coordinates.
+    public var centerX: Double
+    public var centerY: Double
+    /// Width and height are this same value, so the artwork stays square.
+    public var side: Double
+}
+
+public enum FolderPanelMetrics {
+    /// The open panel stops growing well before the edges of the overlay.
+    public static let maxWidth: Double = 460
+    /// At least this fraction of the overlay stays wallpaper on each side.
+    public static let sideMarginFraction: Double = 0.24
+    public static let openCornerRadius: Double = 28
+    public static let tileCornerFactor: Double = 0.22
+    public static let padding: Double = 28
+    public static let iconGap: Double = 18
+    public static let labelBlock: Double = 40
+    public static let rowGap: Double = 16
+
+    public static func openWidth(overlayWidth: Double) -> Double {
+        let available = max(overlayWidth * (1 - sideMarginFraction * 2), 180)
+        return min(maxWidth, available)
     }
 
-    /// Straight-line center. The same progress moves both axes, so the path does not arc.
-    public static func center(
-        fromTileX: Double,
-        fromTileY: Double,
-        toRestX: Double,
-        toRestY: Double,
-        progress: Double
-    ) -> (x: Double, y: Double) {
-        (
-            x: fromTileX + (toRestX - fromTileX) * progress,
-            y: fromTileY + (toRestY - fromTileY) * progress
+    public static func sideMargin(overlayWidth: Double) -> Double {
+        max(0, (overlayWidth - openWidth(overlayWidth: overlayWidth)) / 2)
+    }
+
+    public static func openMetrics(overlayWidth: Double, preferredIcon: Double, appCount: Int) -> FolderOpenMetrics {
+        let count = max(appCount, 1)
+        let columns = min(count, 4)
+        let rows = (count + columns - 1) / columns
+        let width = openWidth(overlayWidth: overlayWidth)
+        let inner = max(width - padding * 2, 36)
+        let gaps = iconGap * Double(max(columns - 1, 0))
+        let fitted = (inner - gaps) / Double(columns)
+        let icon = min(max(preferredIcon, 36), max(fitted, 36))
+        let height = padding * 2
+            + Double(rows) * (icon + labelBlock)
+            + Double(max(rows - 1, 0)) * rowGap
+        return FolderOpenMetrics(
+            width: width,
+            height: height,
+            iconSide: icon,
+            sideMargin: sideMargin(overlayWidth: overlayWidth),
+            columns: columns
+        )
+    }
+
+    /// Width and height move on their own, so a square becomes a wider rectangle.
+    /// Progress is clamped: the ends are exactly the tile and exactly the open panel.
+    public static func shape(
+        progress: Double,
+        tileSide: Double,
+        tileCenterX: Double,
+        tileCenterY: Double,
+        open: FolderOpenMetrics,
+        openCenterX: Double,
+        openCenterY: Double
+    ) -> FolderContainerShape {
+        let t = min(max(progress, 0), 1)
+        let tileRadius = tileSide * tileCornerFactor
+        return FolderContainerShape(
+            centerX: tileCenterX + (openCenterX - tileCenterX) * t,
+            centerY: tileCenterY + (openCenterY - tileCenterY) * t,
+            width: tileSide + (open.width - tileSide) * t,
+            height: tileSide + (open.height - tileSide) * t,
+            cornerRadius: tileRadius + (openCornerRadius - tileRadius) * t
+        )
+    }
+
+    /// One side length for the icon. Its box never takes a different width and height.
+    public static func iconBox(
+        index: Int,
+        appCount: Int,
+        progress: Double,
+        tileSide: Double,
+        open: FolderOpenMetrics
+    ) -> FolderIconBox {
+        let t = min(max(progress, 0), 1)
+        let count = max(appCount, 1)
+        let mini = tileSide / 3.6
+        let miniSpacing = 3.0
+        let miniColumns = 3
+        let miniIndex = min(max(index, 0), 8)
+        let miniColumn = miniIndex % miniColumns
+        let miniRow = miniIndex / miniColumns
+        let miniGrid = Double(miniColumns) * mini + Double(miniColumns - 1) * miniSpacing
+        let miniOrigin = (tileSide - miniGrid) / 2
+        let miniX = miniOrigin + Double(miniColumn) * (mini + miniSpacing) + mini / 2
+        let miniY = miniOrigin + Double(miniRow) * (mini + miniSpacing) + mini / 2
+
+        let columns = open.columns
+        let rows = (count + columns - 1) / columns
+        let column = min(max(index, 0), count - 1) % columns
+        let row = min(max(index, 0), count - 1) / columns
+        let rowWidth = Double(columns) * open.iconSide + Double(max(columns - 1, 0)) * iconGap
+        let originX = (open.width - rowWidth) / 2
+        let openX = originX + Double(column) * (open.iconSide + iconGap) + open.iconSide / 2
+        let block = open.iconSide + labelBlock
+        let contentHeight = Double(rows) * block + Double(max(rows - 1, 0)) * rowGap
+        let originY = (open.height - contentHeight) / 2
+        let openY = originY + Double(row) * (block + rowGap) + open.iconSide / 2
+        return FolderIconBox(
+            centerX: miniX + (openX - miniX) * t,
+            centerY: miniY + (openY - miniY) * t,
+            side: mini + (open.iconSide - mini) * t
         )
     }
 }
