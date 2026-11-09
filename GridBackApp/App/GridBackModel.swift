@@ -17,16 +17,23 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var appsByID: [String: AppRecord] = [:]
     @Published private(set) var searchQuery = ""
     @Published private(set) var currentPage = 0
+    @Published private(set) var openFolderID: String?
+    @Published private(set) var folderCloseRequest = 0
+    private var folderCloseInFlight = false
     @Published private(set) var selectedResultIndex = 0
     @Published private(set) var isOverlayVisible = false
     @Published private(set) var launchError: String?
     @Published private(set) var shortcut: ShortcutChord
+    @Published var heldDrag = HeldDrag()
     @Published private(set) var hotkeyFailure: String?
     @Published private(set) var persistenceWarning: String?
     @Published private(set) var isRecordingShortcut = false
     @Published private(set) var shortcutStatus: String?
     @Published private(set) var isScanning = true
     @Published private(set) var iconImages: [String: NSImage] = [:]
+    /// Menu bar and Dock space taken from the screen's visible frame. Zero on
+    /// an edge means that edge is not reserved, including an auto-hidden Dock.
+    @Published private(set) var screenReserve = ScreenReserve.none
 
     weak var delegate: GridBackUIDelegate?
 
@@ -75,6 +82,11 @@ final class GridBackModel: ObservableObject {
         }
     }
 
+    func updateScreenReserve(_ reserve: ScreenReserve) {
+        guard reserve != screenReserve else { return }
+        screenReserve = reserve
+    }
+
     func start() {
         guard !didStart else { return }
         didStart = true
@@ -97,6 +109,7 @@ final class GridBackModel: ObservableObject {
         searchQuery = ""
         selectedResultIndex = 0
         launchError = nil
+        closeFolder()
         isOverlayVisible = true
         delegate?.gridBackShowOverlay()
         rescan()
@@ -107,6 +120,7 @@ final class GridBackModel: ObservableObject {
         isOverlayVisible = false
         searchQuery = ""
         launchError = nil
+        closeFolder()
         delegate?.gridBackHideOverlay()
     }
 
@@ -119,6 +133,9 @@ final class GridBackModel: ObservableObject {
         searchQuery = text
         selectedResultIndex = 0
         launchError = nil
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            requestCloseFolder()
+        }
     }
 
     func selectPage(_ page: Int) {
@@ -128,13 +145,79 @@ final class GridBackModel: ObservableObject {
 
     func handleKeyDown(keyCode: UInt16, characters: String, modifiers: KeyModifiers) -> Bool {
         guard isOverlayVisible else { return false }
-        let action = SearchKeyRouting.action(
+        var drag = heldDrag
+        let command = OverlayCommanding.command(
             keyCode: keyCode,
             characters: characters,
             modifiers: modifiers,
             isSearching: isSearching,
-            columns: layout.metrics.columns
+            folderIsOpen: openFolderID != nil,
+            columns: layout.metrics.columns,
+            drag: &drag
         )
+        heldDrag = drag
+        switch command {
+        case .cancelDrag(let cancellation):
+            if cancellation.closeTransientFolder {
+                requestCloseFolder()
+            }
+            return true
+        case .key(let action):
+            return apply(action)
+        }
+    }
+
+    func beginHeldGridDrag(appID: String) {
+        var drag = heldDrag
+        drag.beginGrid(appID: appID, origin: layout)
+        heldDrag = drag
+    }
+
+    func beginHeldFolderDrag(appID: String, folderID: String) {
+        var drag = heldDrag
+        drag.pickInsideFolder(appID: appID, folderID: folderID, origin: layout)
+        heldDrag = drag
+    }
+
+    func noteHeldExtracted() {
+        var drag = heldDrag
+        drag.markExtracted()
+        heldDrag = drag
+    }
+
+    func beginHeldInsertion(folderID: String, index: Int) {
+        var drag = heldDrag
+        drag.beginInsertion(folderID: folderID, index: index)
+        heldDrag = drag
+    }
+
+    func updateHeldInsertion(index: Int) {
+        var drag = heldDrag
+        drag.updateInsertion(index: index)
+        heldDrag = drag
+    }
+
+    func leaveHeldInsertion() {
+        var drag = heldDrag
+        drag.leaveInsertion()
+        heldDrag = drag
+    }
+
+    func resolveHoverRelease(insideContent: Bool) -> HeldDrag.Outcome {
+        var drag = heldDrag
+        let outcome = drag.resolveHoverRelease(insideContent: insideContent)
+        heldDrag = drag
+        return outcome
+    }
+
+    func completeHeldDrag() -> HeldDrag.Outcome {
+        var drag = heldDrag
+        let outcome = drag.complete()
+        heldDrag = drag
+        return outcome
+    }
+
+    private func apply(_ action: SearchKeyAction) -> Bool {
         switch action {
         case .startOrAppend(let text):
             searchQuery.append(text)
@@ -150,6 +233,13 @@ final class GridBackModel: ObservableObject {
             selectedResultIndex = 0
         case .dismiss:
             hideOverlay()
+        case .closeFolder:
+            if folderCloseInFlight {
+                closeFolder()
+                hideOverlay()
+            } else {
+                requestCloseFolder()
+            }
         case .launchSelected:
             guard searchResults.indices.contains(selectedResultIndex) else { return true }
             launch(id: searchResults[selectedResultIndex].id)
@@ -192,7 +282,67 @@ final class GridBackModel: ObservableObject {
         }
     }
 
-    /// Saves an in-grid drag. Called once, when the finger lifts.
+    func openFolder(_ id: String) {
+        guard layout.folder(id) != nil else { return }
+        openFolderID = id
+    }
+
+    /// Asks the open folder to play its close. The folder view removes itself when that finishes.
+    func requestCloseFolder() {
+        guard openFolderID != nil else { return }
+        guard !folderCloseInFlight else { return }
+        folderCloseInFlight = true
+        folderCloseRequest += 1
+    }
+
+    func closeFolder() {
+        openFolderID = nil
+        folderCloseInFlight = false
+    }
+
+    func group(draggedAppID: String, targetID: String) {
+        let previous = layout
+        let updated = FolderEditing.group(layout: previous, draggedAppID: draggedAppID, targetID: targetID)
+        guard updated != previous else { return }
+        layout = updated
+        if let created = FolderEditing.createdFolderID(before: previous, after: updated) {
+            openFolderID = created
+        }
+        if let path = updated.indexPath(of: targetID) ?? updated.folders.compactMap({ folder in
+            folder.appIDs.contains(draggedAppID) ? updated.indexPath(of: folder.id) : nil
+        }).first {
+            currentPage = path.page
+        }
+        save()
+    }
+
+    func commitFolderInsert(appID: String, folderID: String, index: Int) {
+        let updated = FolderEditing.insertApp(layout: layout, appID: appID, folderID: folderID, at: index)
+        guard updated != layout else { return }
+        layout = updated
+        openFolderID = folderID
+        save()
+    }
+
+    func returnAppToGrid(_ appID: String) {
+        let page = layout.pages.indices.contains(currentPage) ? currentPage : 0
+        let slot = layout.pages.indices.contains(page) ? layout.pages[page].count : 0
+        let updated = FolderEditing.moveAppOut(layout: layout, appID: appID, toPage: page, toSlot: slot)
+        guard updated != layout else { return }
+        layout = updated
+        if let openFolderID, updated.folder(openFolderID) == nil {
+            self.openFolderID = nil
+        }
+        save()
+    }
+
+    func renameFolder(_ id: String, to name: String) {
+        let updated = FolderEditing.rename(layout: layout, folderID: id, name: name)
+        guard updated != layout else { return }
+        layout = updated
+        save()
+    }
+
     func commitReorder(_ layout: Layout, page: Int) {
         guard !isSearching else { return }
         if layout != self.layout {

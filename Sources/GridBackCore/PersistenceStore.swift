@@ -24,7 +24,7 @@ public struct PersistenceStore: Sendable {
         } catch {
             throw PersistenceError.unreadable(String(describing: error))
         }
-        guard decoded.version == PersistedState.currentVersion else {
+        guard decoded.version >= 1, decoded.version <= PersistedState.currentVersion else {
             throw PersistenceError.unsupportedVersion(decoded.version)
         }
         return decoded.repaired()

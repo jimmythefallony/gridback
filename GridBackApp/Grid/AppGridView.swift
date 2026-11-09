@@ -5,9 +5,13 @@ import SwiftUI
 struct AppGridView: View {
     @ObservedObject var model: GridBackModel
     var layout: LaunchGridLayout
-    var ids: [String]
+    var items: [GridBackCore.GridItem]
     var hiddenID: String?
+    var hiddenFolderID: String?
+    var armedID: String?
     var blockLaunch: Bool
+    var displayFolders: [AppFolder]? = nil
+    var suppressedAppID: String? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -15,29 +19,125 @@ struct AppGridView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if hiddenID == nil {
-                        model.hideOverlay()
+                        if model.openFolderID != nil {
+                            model.requestCloseFolder()
+                        } else {
+                            model.hideOverlay()
+                        }
                     }
                 }
-            ForEach(Array(ids.enumerated()), id: \.element) { slot, id in
-                if id != hiddenID {
-                    AppIconButton(
-                        title: model.appsByID[id]?.displayName ?? id,
-                        image: model.iconImages[id],
-                        iconSide: layout.iconSide,
-                        labelWidth: max(layout.hitWidth - 12, layout.iconSide)
-                    ) {
-                        guard !blockLaunch else { return }
-                        model.launch(id: id)
-                    }
-                    .position(
-                        x: layout.originX + layout.columnCenter(slot),
-                        y: layout.rowCenter(slot)
-                    )
+            ForEach(Array(items.enumerated()), id: \.element.id) { slot, item in
+                if item.id != hiddenID && item.id != hiddenFolderID {
+                    tile(item, slot: slot)
+                        .position(
+                            x: layout.originX + layout.columnCenter(slot),
+                            y: layout.rowCenter(slot)
+                        )
                 }
             }
         }
         .frame(width: layout.pageWidth, height: layout.gridHeight)
-        .animation(.easeInOut(duration: 0.16), value: ids)
+        .animation(.easeInOut(duration: GridReorderMotion.displacedDuration), value: items)
+    }
+
+    @ViewBuilder
+    private func tile(_ item: GridBackCore.GridItem, slot: Int) -> some View {
+        let armed = item.id == armedID
+        switch item {
+        case .app(let id):
+            AppIconButton(
+                title: model.appsByID[id]?.displayName ?? id,
+                image: model.iconImages[id],
+                iconSide: layout.iconSide,
+                labelWidth: max(layout.hitWidth - 12, layout.iconSide)
+            ) {
+                guard !blockLaunch else { return }
+                model.launch(id: id)
+            }
+            .overlay {
+                if armed {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 3)
+                        .frame(width: layout.iconSide + 14, height: layout.iconSide + 14)
+                        .offset(y: -(layout.labelHeight + layout.iconLabelGap) / 2)
+                }
+            }
+        case .folder(let id):
+            let folder = (displayFolders ?? model.layout.folders).first { $0.id == id } ?? model.layout.folder(id)
+            FolderTile(
+                name: folder?.name ?? AppFolder.defaultName,
+                icons: (folder?.appIDs ?? []).filter { $0 != suppressedAppID }.prefix(9).map { model.iconImages[$0] },
+                iconSide: layout.iconSide,
+                labelWidth: max(layout.hitWidth - 12, layout.iconSide),
+                armed: armed
+            ) {
+                guard !blockLaunch else { return }
+                model.openFolder(id)
+            }
+        }
+    }
+}
+
+struct FolderTile: View {
+    let name: String
+    let icons: [NSImage?]
+    var iconSide: CGFloat
+    var labelWidth: CGFloat
+    var armed: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                folderIcon
+                    .frame(width: iconSide, height: iconSide)
+                Text(name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(width: labelWidth)
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(GridPlainButtonStyle())
+        .fixedSize()
+        .help(name)
+        .accessibilityLabel(name)
+    }
+
+    private var folderIcon: some View {
+        let mini = iconSide / 3.6
+        return RoundedRectangle(cornerRadius: iconSide * 0.22, style: .continuous)
+            .fill(Color.white.opacity(armed ? 0.28 : 0.16))
+            .overlay {
+                RoundedRectangle(cornerRadius: iconSide * 0.22, style: .continuous)
+                    .strokeBorder(Color.white.opacity(armed ? 0.95 : 0.28), lineWidth: armed ? 3 : 1)
+            }
+            .overlay {
+                LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(mini), spacing: 3), count: 3), spacing: 3) {
+                    ForEach(0..<9, id: \.self) { index in
+                        miniIcon(index < icons.count ? icons[index] : nil, side: mini)
+                    }
+                }
+                .padding(iconSide * 0.12)
+            }
+    }
+
+    private func miniIcon(_ image: NSImage?, side: CGFloat) -> some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: side, height: side)
     }
 }
 

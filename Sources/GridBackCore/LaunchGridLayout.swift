@@ -21,6 +21,10 @@ public struct LaunchGridLayout: Equatable, Sendable {
     public var gridHeight: Double
     public var topChrome: Double
     public var bottomChrome: Double
+    /// Horizontal center of the area not reserved by the Dock or menu bar.
+    public var contentCenterX: Double
+    public var searchCenterY: Double
+    public var pageControlCenterY: Double
 
     public var contentHeight: Double {
         iconSide + iconLabelGap + labelHeight
@@ -30,16 +34,24 @@ public struct LaunchGridLayout: Equatable, Sendable {
         overlayWidth: Double,
         overlayHeight: Double,
         columns: Int,
-        rows: Int
+        rows: Int,
+        reserve: ScreenReserve = .none
     ) -> LaunchGridLayout {
         let columns = max(columns, 1)
         let rows = max(rows, 1)
-        let topChrome = 108.0
-        let bottomChrome = 108.0
-        // About 9% of the screen on each side. The rest is the icon area,
+        let reservedTop = max(0, reserve.top)
+        let reservedLeft = max(0, reserve.left)
+        let reservedBottom = max(0, reserve.bottom)
+        let reservedRight = max(0, reserve.right)
+        // The 108pt chrome clears the search pill and the page controls.
+        // A visible Dock or menu bar pushes that chrome out past the reserved edge.
+        let topChrome = max(108, reservedTop + 80)
+        let bottomChrome = max(108, reservedBottom + 80)
+        let usableWidth = max(overlayWidth - reservedLeft - reservedRight, 1)
+        // About 9% of the usable width on each side. The rest is the icon area,
         // and that padding lives inside each full-width page.
-        let sideMargin = overlayWidth * 0.09
-        let gridWidth = max(overlayWidth - sideMargin * 2, 1)
+        let sideMargin = usableWidth * 0.09
+        let gridWidth = max(usableWidth - sideMargin * 2, 1)
         let columnStride = gridWidth / Double(columns)
         var iconSide = min(112, max(64, columnStride * 0.58))
         var rowStride = max(iconSide + 40, min(168, columnStride * 0.92))
@@ -49,7 +61,7 @@ public struct LaunchGridLayout: Equatable, Sendable {
             iconSide = min(iconSide, max(56, rowStride * 0.62))
         }
         let gridHeight = rowStride * Double(rows)
-        let originX = (overlayWidth - gridWidth) / 2
+        let originX = reservedLeft + (usableWidth - gridWidth) / 2
         let originY = topChrome + max(0, (availableHeight - gridHeight) / 2)
         let hitWidth = min(columnStride - 16, iconSide + 36)
         let labelHeight = min(28, max(16, rowStride - iconSide - 6))
@@ -68,7 +80,10 @@ public struct LaunchGridLayout: Equatable, Sendable {
             gridWidth: gridWidth,
             gridHeight: gridHeight,
             topChrome: topChrome,
-            bottomChrome: bottomChrome
+            bottomChrome: bottomChrome,
+            contentCenterX: reservedLeft + usableWidth / 2,
+            searchCenterY: max(58, reservedTop + 36),
+            pageControlCenterY: overlayHeight - max(58, reservedBottom + 36)
         )
     }
 
@@ -91,6 +106,31 @@ public struct LaunchGridLayout: Equatable, Sendable {
         return row * columns + column
     }
 
+    /// Where a drag should insert when it is in a gap rather than on an icon.
+    /// The index is clamped to `itemCount`, so it never points at a missing cell.
+    public func insertionSlot(x: Double, y: Double, itemCount: Int) -> Int? {
+        guard columnStride > 0, rowStride > 0, columns > 0, rows > 0 else { return nil }
+        let localX = x - originX
+        let localY = y - originY
+        guard localY >= 0, localY < gridHeight else { return nil }
+        guard localX >= 0, localX < gridWidth else { return nil }
+        let row = min(max(Int(localY / rowStride), 0), rows - 1)
+        let gap = Int((localX / columnStride).rounded())
+        let clampedGap = min(max(gap, 0), columns)
+        return min(max(row * columns + clampedGap, 0), max(itemCount, 0))
+    }
+
+    /// The pointer is over the icon artwork, not the label or the gap around the cell.
+    public func isOverIconCenter(x: Double, y: Double, slot: Int) -> Bool {
+        guard slot >= 0, columns > 0 else { return false }
+        let centerX = originX + columnCenter(slot)
+        let centerY = originY + rowCenter(slot) - (labelHeight + iconLabelGap) / 2
+        let dx = x - centerX
+        let dy = y - centerY
+        let radius = iconSide * 0.5
+        return dx * dx + dy * dy <= radius * radius
+    }
+
     public func columnCenter(_ slot: Int) -> Double {
         let column = slot % columns
         return (Double(column) + 0.5) * columnStride
@@ -100,4 +140,9 @@ public struct LaunchGridLayout: Equatable, Sendable {
         let row = slot / columns
         return (Double(row) + 0.5) * rowStride
     }
+}
+
+/// How neighboring icons slide when a drag changes their slots.
+public enum GridReorderMotion {
+    public static let displacedDuration: Double = 0.16
 }

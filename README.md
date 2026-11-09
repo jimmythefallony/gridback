@@ -6,29 +6,47 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is an early release, version 0.1.0. It is open source, and it is not a finished product.
+This is version 0.2.0. It is open source, and it is not a finished product.
 
 ## What works
 
 ![A page of apps in GridBack](docs/images/gridback-grid.png)
 
+![The grid with the folders Apple_stuff and Mixed](docs/images/gridback-folders.png)
+
+![The open folder Apple_stuff](docs/images/gridback-folder-open.png)
+
+![Rename a folder by clicking its name](docs/images/gridback-folder-rename.png)
+
 These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 - A grid icon sits in the menu bar. Click it for **Open GridBack**, **Settings…**, and **Quit GridBack**.
 - The shortcut is **Control-Option-G**. It works while another app is in front. The same shortcut closes the grid. You can change it in Settings.
-- Type to search for an app.
-- Escape clears the search. Press Escape again and the grid closes.
+- Type to search for an app. Search also finds an app that is inside a folder, and clicking the result opens that app.
+- Escape clears the search. If a folder is open, the next Escape closes the folder. One more Escape closes the grid.
 - Click an app to open it.
 - Drag apps to rearrange them. The new order is still there after you quit and open GridBack again.
+- Drag an app onto another app and rest there briefly. GridBack makes a folder with those two apps and opens it. Resting on a folder that already exists adds the app to it.
+- Hold an app on an existing folder for about a second. The folder opens while you are still holding the app. Move into the folder and let go in a gap to place it there. Let go outside the folder and the app stays on the grid.
+- Open a folder and drag an app out. The icon stays under the pointer, the folder closes, and you can drop the app in a gap on the grid.
+- Inside an open folder you can drag apps into a new order. Click an empty part of the screen to close the folder. The folder grows out of its tile when it opens, and it shrinks back into that tile when it closes. The rest of the grid fades out and back in place. If Reduce Motion is on, the folder opens and closes without that movement.
 - Drag an app to the left or right edge of the screen to move it to another page.
 - Change pages with a two-finger swipe on the trackpad, the left and right arrow keys, or the arrows on the screen.
+- The grid covers the menu bar. The real Dock stays visible underneath the grid, including when Dock magnification is on.
 - The grid can open on top of an app that is in full screen.
-- GridBack remembers the page you were on.
+- GridBack remembers the page you were on, and it remembers your folders.
 - If you have another monitor connected, the grid appears on the main display.
+- The menu-bar icon is a cream and black grid.
 
 ## What this version does not do
 
-Folders are not in this version, and neither is the pinch gesture on the trackpad. The Dock does not show over the grid. These are planned for a later version.
+The pinch gesture on the trackpad is not in this version. You also cannot drag an app from the grid onto the real macOS Dock.
+
+## Known issues
+
+- Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
+- Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
+- The first time the grid opens on a HEIC desktop picture, macOS may write a Hang Risk line to the log. The grid still opens. The message is harmless.
 
 The app is unsigned and not notarized. macOS will warn you the first time you open a downloaded copy. That is expected. See below.
 
@@ -38,7 +56,7 @@ An Apple silicon Mac running **macOS 26 or later**. That is the minimum set in t
 
 ## Install
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.1.0.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.2.0.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 
@@ -78,7 +96,7 @@ Please include your macOS version, what you expected, and what happened instead.
 
 ## What comes next
 
-Version 0.2 will add folders, and we will refine the app from what testers report.
+The pinch gesture is still to come. We will keep refining the app from what testers report.
 
 ## License
 
