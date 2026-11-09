@@ -12,9 +12,11 @@ This is version 0.2.0. It is open source, and it is not a finished product.
 
 ![A page of apps in GridBack](docs/images/gridback-grid.png)
 
-![The grid with two folders](docs/images/gridback-folders.png)
+![The grid with the folders Apple_stuff and Mixed](docs/images/gridback-folders.png)
 
-![An open folder](docs/images/gridback-folder-open.png)
+![The open folder Apple_stuff](docs/images/gridback-folder-open.png)
+
+![Rename a folder by clicking its name](docs/images/gridback-folder-rename.png)
 
 These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
