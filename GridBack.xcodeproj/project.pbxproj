@@ -111,6 +111,18 @@
 			isa = PBXBuildFile;
 			fileRef = D5E6F708192A3B4C5D6E7F81;
 		};
+		E8A1C3B507192A3B4C5D6E01 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = F9B2D4C608192A3B4C5D6E02;
+		};
+		A0C3E5D709192A3B4C5D6E03 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = B1D4F6E80A192A3B4C5D6E04;
+		};
+		C2E5A7B90B192A3B4C5D6E05 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D3F6B8A90C192A3B4C5D6E06;
+		};
 		0A0000000000000000000019 /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			productRef = 0A0000000000000000000017;
@@ -240,6 +252,18 @@
 			path = SettingsWindowController.swift;
 			sourceTree = "<group>";
 		};
+		F9B2D4C608192A3B4C5D6E02 /* SystemLoginItemService.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = SystemLoginItemService.swift;
+			sourceTree = "<group>";
+		};
+		B1D4F6E80A192A3B4C5D6E04 /* LoginItemModel.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = LoginItemModel.swift;
+			sourceTree = "<group>";
+		};
 		A757FB1518612DE09BAA76F9 /* Info.plist */ = {
 			isa = PBXFileReference;
 			lastKnownFileType = text.plist.xml;
@@ -292,6 +316,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = GridInteractionTests.swift;
+			sourceTree = "<group>";
+		};
+		D3F6B8A90C192A3B4C5D6E06 /* LoginItemStateTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = LoginItemStateTests.swift;
 			sourceTree = "<group>";
 		};
 		0A0000000000000000000014 /* GridBack.app */ = {
@@ -399,6 +429,8 @@
 			children = (
 				B9E01E9DA2E3956842736BC1,
 				0756ED57D770892CC8917F08,
+				B1D4F6E80A192A3B4C5D6E04,
+				F9B2D4C608192A3B4C5D6E02,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -429,6 +461,7 @@
 				D5E6F708192A3B4C5D6E7F81,
 				B36D39777581103D750303F1,
 				F8B2D5C03E7E49C1B2D4E6F8,
+				D3F6B8A90C192A3B4C5D6E06,
 			);
 			path = GridBackCoreTests;
 			sourceTree = "<group>";
@@ -579,6 +612,8 @@
 				1A5A5A2003374CF82967F8A6,
 				DE02B9A356B600C1EC54E7ED,
 				38CEF8A97ECD396A85BB061D,
+				E8A1C3B507192A3B4C5D6E01,
+				A0C3E5D709192A3B4C5D6E03,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -593,6 +628,7 @@
 				C4E5F60718293A4B5D6E7F80,
 				58104959C104BEB803A7EB94,
 				E7A1C4B92F6D48B0A1C3D5E7,
+				C2E5A7B90B192A3B4C5D6E05,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

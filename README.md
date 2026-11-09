@@ -22,6 +22,7 @@ These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 - A grid icon sits in the menu bar. Click it for **Open GridBack**, **Settings…**, and **Quit GridBack**.
 - The shortcut is **Control-Option-G**. It works while another app is in front. The same shortcut closes the grid. You can change it in Settings.
+- Settings has **Start GridBack at login**. It is off until you turn it on. When you log in, GridBack stays in the menu bar and does not open the grid.
 - Type to search for an app. Search also finds an app that is inside a folder, and clicking the result opens that app.
 - Escape clears the search. If a folder is open, the next Escape closes the folder. One more Escape closes the grid.
 - Click an app to open it.
