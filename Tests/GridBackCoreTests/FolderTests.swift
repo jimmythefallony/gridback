@@ -477,6 +477,16 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 250, localY: 20, slotCount: 4, open: metrics), 3)
     }
 
+    func testOutsideReleaseLetsTheNextBackgroundClickCloseTheFolder() {
+        var gate = FolderClickGate()
+        gate.beginHoverInsertion()
+        XCTAssertFalse(gate.outsideClickClosesFolder)
+        gate.endDrag()
+        XCTAssertTrue(gate.outsideClickClosesFolder)
+        gate.endDrag()
+        XCTAssertTrue(gate.outsideClickClosesFolder)
+    }
+
     func testFolderNeighborsUseTheSameSlideDurationAsTheGrid() {
         XCTAssertEqual(GridReorderMotion.displacedDuration, 0.16, accuracy: 0.0001)
     }

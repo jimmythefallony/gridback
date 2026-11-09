@@ -25,6 +25,8 @@ struct OverlayRootView: View {
     @State private var gridChromeVisible = true
     @State private var holdOpen = FolderHoldOpen.Watch()
     @State private var insertingIntoFolder: String?
+    @State private var folderClickGate = FolderClickGate()
+    @State private var returningHome = false
     @State private var insertIndex = 0
     @State private var insertionAnchor = CGRect.null
     @State private var showingInsertionGap = false
@@ -103,7 +105,7 @@ struct OverlayRootView: View {
                         reduceMotion: reduceMotion,
                         collapse: folderHandoff,
                         holdDismiss: holdDismiss,
-                        passesDragThrough: insertingIntoFolder != nil,
+                        passesDragThrough: !folderClickGate.outsideClickClosesFolder,
                         suppressLaunch: blockLaunch,
                         gridChromeVisible: $gridChromeVisible,
                         iconFrames: $folderIconFrames,
@@ -112,7 +114,7 @@ struct OverlayRootView: View {
                     )
                 }
 
-                if reorder != nil || folderDragID != nil {
+                if reorder != nil || folderDragID != nil || returningHome {
                     draggedTile((reorder?.appID ?? folderDragID) ?? "", iconSide: chrome.iconSide)
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
                         .position(finger)
@@ -158,6 +160,12 @@ struct OverlayRootView: View {
             .onChange(of: model.heldDrag.suppressCommit) { _, suppressed in
                 if suppressed {
                     abandonDragVisuals()
+                }
+            }
+            .onChange(of: model.isOverlayVisible) { _, visible in
+                if !visible {
+                    returningHome = false
+                    releaseDragChrome()
                 }
             }
             .onChange(of: model.openFolderID) { _, id in
@@ -275,9 +283,22 @@ struct OverlayRootView: View {
                         model.commitReorder(reorder.preview, page: reorder.page)
                     }
                 }
-                reorder = nil
+                let session = reorder
+                releaseDragChrome()
+                settleReleasedIcon(session, layout: layout)
                 clearArmedDrag()
             }
+    }
+
+    /// Hover-insert must not keep blocking clicks after the pointer is up.
+    private func releaseDragChrome() {
+        insertingIntoFolder = nil
+        showingInsertionGap = false
+        insertionAnchor = .null
+        folderClickGate.endDrag()
+        if !holdDismiss {
+            holdOpenSuspended = false
+        }
     }
 
     private func clearArmedDrag() {
@@ -352,6 +373,7 @@ struct OverlayRootView: View {
             if case .open(let folderID) = decision, insertingIntoFolder == nil {
                 session.restoreOriginal()
                 insertingIntoFolder = folderID
+                folderClickGate.beginHoverInsertion()
                 insertIndex = 0
                 showingInsertionGap = false
                 insertionAnchor = tileAnchor(folderID, layout: layout)
@@ -568,13 +590,44 @@ struct OverlayRootView: View {
 
     private func abandonDragVisuals() {
         pointerHandoff.stop()
+        returningHome = false
         reorder = nil
         folderDragID = nil
         folderHandoff = false
-        insertingIntoFolder = nil
         dragSettled = true
         armClock.stop()
+        releaseDragChrome()
         clearArmedDrag()
+    }
+
+    private func settleReleasedIcon(_ session: GridReorderSession?, layout: LaunchGridLayout) {
+        let home = session.flatMap { session -> CGPoint? in
+            let previewPath = session.preview.indexPath(of: session.appID)
+            let originalPath = session.original.indexPath(of: session.appID)
+            guard let previewPath, let originalPath, previewPath == originalPath else {
+                return nil
+            }
+            return folderTileCenter(
+                session.appID,
+                layout: layout,
+                overlaySize: CGSize(width: layout.pageWidth, height: layout.gridHeight)
+            )
+        }
+        guard let home, !reduceMotion else {
+            reorder = nil
+            folderDragID = nil
+            return
+        }
+        returningHome = true
+        withAnimation(.easeInOut(duration: GridReorderMotion.displacedDuration)) {
+            finger = home
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + GridReorderMotion.displacedDuration) {
+            guard returningHome else { return }
+            returningHome = false
+            reorder = nil
+            folderDragID = nil
+        }
     }
 
     private func folderAppID(at point: CGPoint, folder: AppFolder, layout: LaunchGridLayout) -> String? {
@@ -610,6 +663,7 @@ struct OverlayRootView: View {
         folderDragID = nil
         folderHandoff = false
         pointerHandoff.stop()
+        releaseDragChrome()
         DispatchQueue.main.async {
             blockLaunch = false
         }

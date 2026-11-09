@@ -450,6 +450,24 @@ public enum FolderPanelExit {
     }
 }
 
+/// Whether a click outside an open folder is allowed to close it.
+/// A hover-insert that is still marked in progress swallows that click.
+public struct FolderClickGate: Equatable, Sendable {
+    public var hoverInserting: Bool = false
+
+    public init() {}
+
+    public var outsideClickClosesFolder: Bool { !hoverInserting }
+
+    public mutating func beginHoverInsertion() {
+        hoverInserting = true
+    }
+
+    public mutating func endDrag() {
+        hoverInserting = false
+    }
+}
+
 public enum FolderInsertionGate {
     /// The folder opens while the pointer is still on the grid tile. The panel then moves
     /// to the middle, so that tile is outside the panel. Staying there is not leaving.
