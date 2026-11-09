@@ -12,6 +12,10 @@ This is version 0.2.0. It is open source, and it is not a finished product.
 
 ![A page of apps in GridBack](docs/images/gridback-grid.png)
 
+![The grid with two folders](docs/images/gridback-folders.png)
+
+![An open folder](docs/images/gridback-folder-open.png)
+
 These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 - A grid icon sits in the menu bar. Click it for **Open GridBack**, **Settings…**, and **Quit GridBack**.
