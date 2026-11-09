@@ -18,6 +18,8 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var searchQuery = ""
     @Published private(set) var currentPage = 0
     @Published private(set) var openFolderID: String?
+    @Published private(set) var folderCloseRequest = 0
+    private var folderCloseInFlight = false
     @Published private(set) var selectedResultIndex = 0
     @Published private(set) var isOverlayVisible = false
     @Published private(set) var launchError: String?
@@ -107,7 +109,7 @@ final class GridBackModel: ObservableObject {
         searchQuery = ""
         selectedResultIndex = 0
         launchError = nil
-        openFolderID = nil
+        closeFolder()
         isOverlayVisible = true
         delegate?.gridBackShowOverlay()
         rescan()
@@ -118,7 +120,7 @@ final class GridBackModel: ObservableObject {
         isOverlayVisible = false
         searchQuery = ""
         launchError = nil
-        openFolderID = nil
+        closeFolder()
         delegate?.gridBackHideOverlay()
     }
 
@@ -132,7 +134,7 @@ final class GridBackModel: ObservableObject {
         selectedResultIndex = 0
         launchError = nil
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            openFolderID = nil
+            requestCloseFolder()
         }
     }
 
@@ -157,7 +159,7 @@ final class GridBackModel: ObservableObject {
         switch command {
         case .cancelDrag(let cancellation):
             if cancellation.closeTransientFolder {
-                closeFolder()
+                requestCloseFolder()
             }
             return true
         case .key(let action):
@@ -232,7 +234,12 @@ final class GridBackModel: ObservableObject {
         case .dismiss:
             hideOverlay()
         case .closeFolder:
-            closeFolder()
+            if folderCloseInFlight {
+                closeFolder()
+                hideOverlay()
+            } else {
+                requestCloseFolder()
+            }
         case .launchSelected:
             guard searchResults.indices.contains(selectedResultIndex) else { return true }
             launch(id: searchResults[selectedResultIndex].id)
@@ -280,8 +287,17 @@ final class GridBackModel: ObservableObject {
         openFolderID = id
     }
 
+    /// Asks the open folder to play its close. The folder view removes itself when that finishes.
+    func requestCloseFolder() {
+        guard openFolderID != nil else { return }
+        guard !folderCloseInFlight else { return }
+        folderCloseInFlight = true
+        folderCloseRequest += 1
+    }
+
     func closeFolder() {
         openFolderID = nil
+        folderCloseInFlight = false
     }
 
     func group(draggedAppID: String, targetID: String) {

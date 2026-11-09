@@ -168,6 +168,16 @@ struct OverlayRootView: View {
                     releaseDragChrome()
                 }
             }
+            .onChange(of: model.folderCloseRequest) { _, _ in
+                holdDismiss = true
+                guard !reduceMotion else {
+                    gridChromeVisible = true
+                    return
+                }
+                withAnimation(.easeIn(duration: 0.28)) {
+                    gridChromeVisible = true
+                }
+            }
             .onChange(of: model.openFolderID) { _, id in
                 if id == nil {
                     gridChromeVisible = true
@@ -851,10 +861,10 @@ private struct FolderCover: View {
             .allowsHitTesting(!collapse && !passesDragThrough)
         }
         .onChange(of: collapse) { _, shouldCollapse in
-            if shouldCollapse { beginClose(showGrid: true) }
+            if shouldCollapse { beginClose() }
         }
         .onChange(of: holdDismiss) { _, dismiss in
-            if dismiss { beginClose(showGrid: true) }
+            if dismiss { beginClose() }
         }
         .onAppear {
             name = folder.name
@@ -929,7 +939,7 @@ private struct FolderCover: View {
             }
         }
         .animation(
-            reduceMotion || !revealed ? nil : .easeInOut(duration: GridReorderMotion.displacedDuration),
+            reduceMotion ? nil : .easeInOut(duration: GridReorderMotion.displacedDuration),
             value: arrangedIDs
         )
         .frame(width: shape.width, height: shape.height)
@@ -972,7 +982,7 @@ private struct FolderCover: View {
         .frame(width: side, height: side)
     }
 
-    private func beginClose(showGrid: Bool? = nil) {
+    private func beginClose() {
         guard !closing else { return }
         closing = true
         if reduceMotion {
@@ -980,15 +990,11 @@ private struct FolderCover: View {
             model.closeFolder()
             return
         }
-        let showGridWhileClosing = showGrid ?? collapse
-        withAnimation(.easeInOut(duration: 0.32), completionCriteria: .logicallyComplete) {
+        withAnimation(.easeIn(duration: 0.28), completionCriteria: .logicallyComplete) {
             revealed = false
             titleShown = false
-            if showGridWhileClosing {
-                gridChromeVisible = true
-            }
-        } completion: {
             gridChromeVisible = true
+        } completion: {
             model.closeFolder()
         }
     }

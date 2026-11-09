@@ -20,7 +20,7 @@ struct AppGridView: View {
                 .onTapGesture {
                     if hiddenID == nil {
                         if model.openFolderID != nil {
-                            model.closeFolder()
+                            model.requestCloseFolder()
                         } else {
                             model.hideOverlay()
                         }
