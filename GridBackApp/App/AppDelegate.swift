@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
 
     private let overlay = OverlayController()
     private let settings = SettingsWindowController()
+    private let loginItem = LoginItemModel(service: SystemLoginItemService())
     private var menuBar: MenuBarController?
     private var keyMonitor: Any?
     private let model = GridBackModel.shared
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let policyBefore = NSApp.activationPolicy()
         NSApp.setActivationPolicy(.accessory)
+        // Login and a normal launch stay in the menu bar. The grid opens only from the menu or the shortcut.
         log.info("Launch policy before=\(policyBefore.rawValue, privacy: .public) after=\(NSApp.activationPolicy().rawValue, privacy: .public)")
         model.delegate = self
         overlay.attach(model: model)
@@ -49,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     }
 
     func gridBackShowSettings() {
-        settings.show(model: model)
+        settings.show(model: model, loginItem: loginItem)
     }
 
     private func installKeyMonitor() {

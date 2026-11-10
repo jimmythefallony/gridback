@@ -1,7 +1,9 @@
+import GridBackCore
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: GridBackModel
+    @ObservedObject var loginItem: LoginItemModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -37,9 +39,52 @@ struct SettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            Toggle(String(localized: "Start GridBack at login"), isOn: Binding(
+                get: { loginItem.state.isOn },
+                set: { loginItem.setEnabled($0) }
+            ))
+            .id(loginItem.revision)
+
+            if let failure = loginItem.state.failure {
+                Text(failureMessage(failure))
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if loginItem.state.needsApproval {
+                Text(String(localized: "macOS needs your approval in Login Items before GridBack will open at login."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(String(localized: "Open Login Items")) {
+                    loginItem.openSystemSettingsLoginItems()
+                }
+            }
+
+            if loginItem.state.notFound {
+                Text(String(localized: "macOS can't use this copy of GridBack for login. Move GridBack into your Applications folder and open that copy, then try again."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460, height: 280, alignment: .topLeading)
+        .frame(width: 460, height: 440, alignment: .topLeading)
+        .onAppear { loginItem.refresh() }
+    }
+
+    private func failureMessage(_ failure: LoginItemFailure) -> String {
+        switch failure {
+        case .couldNotTurnOn:
+            return String(localized: "GridBack couldn't turn on start at login.")
+        case .couldNotTurnOff:
+            return String(localized: "GridBack couldn't turn off start at login.")
+        }
     }
 }

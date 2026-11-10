@@ -6,7 +6,7 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is version 0.2.0. It is open source, and it is not a finished product.
+This is version 0.3.0. It is open source, and it is not a finished product.
 
 ## What works
 
@@ -22,6 +22,7 @@ These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 - A grid icon sits in the menu bar. Click it for **Open GridBack**, **Settings…**, and **Quit GridBack**.
 - The shortcut is **Control-Option-G**. It works while another app is in front. The same shortcut closes the grid. You can change it in Settings.
+- Settings has **Start GridBack at login**. It is off until you turn it on. When you log in, GridBack stays in the menu bar and does not open the grid.
 - Type to search for an app. Search also finds an app that is inside a folder, and clicking the result opens that app.
 - Escape clears the search. If a folder is open, the next Escape closes the folder. One more Escape closes the grid.
 - Click an app to open it.
@@ -56,7 +57,7 @@ An Apple silicon Mac running **macOS 26 or later**. That is the minimum set in t
 
 ## Install
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.2.0.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.0.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 

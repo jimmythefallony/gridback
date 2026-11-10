@@ -7,16 +7,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var monitor: Any?
     private var settingsWindow: NSWindow?
 
-    func show(model: GridBackModel) {
+    func show(model: GridBackModel, loginItem: LoginItemModel) {
         self.model = model
+        loginItem.refresh()
         if settingsWindow == nil {
-            let hosting = NSHostingController(rootView: SettingsView(model: model))
+            let hosting = NSHostingController(rootView: SettingsView(model: model, loginItem: loginItem))
             let window = NSWindow(contentViewController: hosting)
             window.title = String(localized: "GridBack Settings")
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
             window.delegate = self
-            window.setContentSize(NSSize(width: 460, height: 280))
+            window.setContentSize(NSSize(width: 460, height: 440))
             window.level = .floating
             settingsWindow = window
         }
