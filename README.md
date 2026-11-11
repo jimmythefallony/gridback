@@ -57,6 +57,26 @@ An Apple silicon Mac running **macOS 26 or later**. That is the minimum set in t
 
 ## Install
 
+### Homebrew
+
+On an Apple silicon Mac with Homebrew:
+
+```
+brew install --cask jimmythefallony/gridback/gridback
+```
+
+On Homebrew 6 or later, that full name trusts only this cask. The first time you open GridBack, choose **Open Anyway** in **System Settings > Privacy & Security**, then confirm with your password or Touch ID. Homebrew does not remove that warning.
+
+To remove GridBack and its saved layout:
+
+```
+brew uninstall --cask --zap jimmythefallony/gridback/gridback
+```
+
+Uninstalling does not turn off Start at login. Remove GridBack in **System Settings > General > Login Items**.
+
+### Download the zip
+
 1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.1.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
