@@ -65,7 +65,7 @@ On an Apple silicon Mac with Homebrew:
 brew install --cask jimmythefallony/gridback/gridback
 ```
 
-On Homebrew 6 or later, that full name trusts only this cask. The app is still not notarized, so the first open shows the same macOS warning as the zip below. Homebrew does not remove that warning.
+On Homebrew 6 or later, that full name trusts only this cask. The first time you open GridBack, choose **Open Anyway** in **System Settings > Privacy & Security**, then confirm with your password or Touch ID. Homebrew does not remove that warning.
 
 To remove GridBack and its saved layout:
 
@@ -73,7 +73,7 @@ To remove GridBack and its saved layout:
 brew uninstall --cask --zap jimmythefallony/gridback/gridback
 ```
 
-If Start at login is on, turn it off in Settings before you uninstall, or remove GridBack from **System Settings > General > Login Items** afterwards.
+Uninstalling does not turn off Start at login. Remove GridBack in **System Settings > General > Login Items**.
 
 ### Download the zip
 
