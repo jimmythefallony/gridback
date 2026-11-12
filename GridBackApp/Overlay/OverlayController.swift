@@ -251,6 +251,14 @@ final class OverlayController: NSObject {
     private func ensurePicture(generation: Int, on screen: NSScreen) {
         guard let job = DesktopPicture.job(on: screen) else {
             log.error("DesktopPicture skipped: no desktop image URL")
+            pictureKey = nil
+            presentWallpaper(
+                hasPicture: false,
+                image: nil,
+                job: nil,
+                generation: generation,
+                cacheKey: ""
+            )
             return
         }
         pictureKey = job.cacheKey
@@ -275,25 +283,64 @@ final class OverlayController: NSObject {
             }
             let (renderedOnMain, qos, cgImage) = result
             self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
-            guard PictureApplyGate.shouldApply(
-                completedGeneration: generation,
-                completedCacheKey: key,
-                currentGeneration: self.showGeneration,
-                currentCacheKey: self.pictureKey ?? "",
-                stillWanted: self.wantsGrid
-            ) else {
-                self.log.info("DesktopPicture drop stale generation=\(generation, privacy: .public) key=\(key, privacy: .public)")
-                return
-            }
-            guard let cgImage else {
-                self.log.error("DesktopPicture render failed")
-                return
-            }
-            let image = NSImage(cgImage: cgImage, size: job.pointSize)
-            DesktopPicture.store(image, key: key)
-            self.applyPicture(image, job: job)
-            self.revealGrid()
+            let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
+            self.presentWallpaper(
+                hasPicture: image != nil,
+                image: image,
+                job: job,
+                generation: generation,
+                cacheKey: key
+            )
         }
+    }
+
+    /// Opens the grid with the picture, or with the plain blur when there is none.
+    /// A failure is not stored, so the next open tries the wallpaper again.
+    private func presentWallpaper(
+        hasPicture: Bool,
+        image: NSImage?,
+        job: DesktopPictureJob?,
+        generation: Int,
+        cacheKey: String
+    ) {
+        switch WallpaperBackdropChoice.choose(
+            hasPicture: hasPicture,
+            completedGeneration: generation,
+            completedCacheKey: cacheKey,
+            currentGeneration: showGeneration,
+            currentCacheKey: pictureKey ?? "",
+            stillWanted: wantsGrid
+        ) {
+        case .ignore:
+            log.info("DesktopPicture drop stale generation=\(generation, privacy: .public) key=\(cacheKey, privacy: .public)")
+        case .plainBlur:
+            log.error("DesktopPicture unavailable; opening with the plain blur")
+            showFallbackBlur()
+            revealGrid()
+        case .picture:
+            guard let image, let job else { return }
+            DesktopPicture.store(image, key: cacheKey)
+            applyPicture(image, job: job)
+            revealGrid()
+        }
+    }
+
+    private func showFallbackBlur() {
+        guard let panel, let backdrop = dockBackdrop else { return }
+        BackdropSurface.show(
+            image: nil,
+            placement: panel.contentView?.bounds ?? .zero,
+            imageView: panel.backdropView,
+            fallback: panel.fallbackBlur,
+            window: panel
+        )
+        BackdropSurface.show(
+            image: nil,
+            placement: backdrop.contentView?.bounds ?? .zero,
+            imageView: backdrop.backdropView,
+            fallback: backdrop.fallbackBlur,
+            window: backdrop
+        )
     }
 
     private func applyPicture(_ image: NSImage, job: DesktopPictureJob) {

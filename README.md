@@ -6,7 +6,7 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is version 0.3.1. It is open source, and it is not a finished product.
+This is version 0.3.2. It is open source, and it is not a finished product.
 
 ## What works
 
