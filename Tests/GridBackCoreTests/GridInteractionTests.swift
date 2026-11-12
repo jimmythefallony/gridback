@@ -263,6 +263,64 @@ final class PicturePreparationTests: XCTestCase {
         ))
     }
 
+    func testMissingWallpaperStillOpensWithThePlainBlurAndIsNotKept() {
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: false,
+                completedGeneration: 2,
+                completedCacheKey: "",
+                currentGeneration: 2,
+                currentCacheKey: "",
+                stillWanted: true
+            ),
+            .plainBlur
+        )
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: false,
+                completedGeneration: 2,
+                completedCacheKey: "missing|100x100",
+                currentGeneration: 2,
+                currentCacheKey: "missing|100x100",
+                stillWanted: true
+            ),
+            .plainBlur
+        )
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: false,
+                completedGeneration: 2,
+                completedCacheKey: "missing|100x100",
+                currentGeneration: 3,
+                currentCacheKey: "missing|100x100",
+                stillWanted: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: false,
+                completedGeneration: 2,
+                completedCacheKey: "",
+                currentGeneration: 2,
+                currentCacheKey: "",
+                stillWanted: false
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: true,
+                completedGeneration: 2,
+                completedCacheKey: "pictures|100x100",
+                currentGeneration: 2,
+                currentCacheKey: "pictures|100x100",
+                stillWanted: true
+            ),
+            .picture
+        )
+    }
+
     func testBoxKernelsStayOddAndMatchTheRetinaBlur() {
         let tiny = GaussianBoxKernel.sizes(sigma: 0, passes: 3)
         XCTAssertEqual(tiny, [1, 1, 1])

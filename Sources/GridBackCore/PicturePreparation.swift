@@ -36,6 +36,34 @@ public enum PictureApplyGate {
     }
 }
 
+/// What to put behind the grid once a wallpaper attempt has finished.
+/// A missing picture is not saved, so the next open tries again.
+public enum WallpaperBackdrop: Equatable, Sendable {
+    case picture
+    case plainBlur
+    case ignore
+}
+
+public enum WallpaperBackdropChoice {
+    public static func choose(
+        hasPicture: Bool,
+        completedGeneration: Int,
+        completedCacheKey: String,
+        currentGeneration: Int,
+        currentCacheKey: String,
+        stillWanted: Bool
+    ) -> WallpaperBackdrop {
+        guard PictureApplyGate.shouldApply(
+            completedGeneration: completedGeneration,
+            completedCacheKey: completedCacheKey,
+            currentGeneration: currentGeneration,
+            currentCacheKey: currentCacheKey,
+            stillWanted: stillWanted
+        ) else { return .ignore }
+        return hasPicture ? .picture : .plainBlur
+    }
+}
+
 /// Runs picture preparation off the main thread, then delivers the result on main.
 /// The main thread does not wait, so it cannot block on lower-priority work.
 public enum OffMainWork {
