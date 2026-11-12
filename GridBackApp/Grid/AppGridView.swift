@@ -154,7 +154,7 @@ struct SearchPill: View {
         .font(.system(size: 16, weight: .medium))
         .padding(.horizontal, 18)
         .frame(width: 280, height: 40)
-        .background(Color.white.opacity(0.16), in: Capsule())
+        .searchFieldPlate()
         .contentShape(Capsule())
         .onTapGesture { isFocused = true }
         .accessibilityLabel(String(localized: "Search"))
