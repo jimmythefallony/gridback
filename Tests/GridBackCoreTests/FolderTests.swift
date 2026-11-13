@@ -676,4 +676,54 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(dropped.heldAppID, "dictionary")
         XCTAssertEqual(dropped.complete(), .reorder)
     }
+
+    func testClosedFolderDropAimsAtTheFolderTile() {
+        let open = FolderPanelMetrics.openMetrics(
+            gridWidth: 700,
+            columns: 7,
+            columnStride: 100,
+            rowStride: 120,
+            iconSide: 64,
+            overlayWidth: 1728,
+            availableHeight: 800,
+            appCount: 5
+        )
+        let panelCenterX = 864.0
+        let panelCenterY = 558.0
+        let box = FolderPanelMetrics.iconBox(index: 4, appCount: 5, progress: 1, tileSide: 64, open: open)
+        let slotX = panelCenterX - open.width / 2 + box.centerX
+        let slotY = panelCenterY - open.height / 2 + box.centerY
+        let tileX = 280.0
+        let tileY = 360.0
+
+        let closed = FolderDropFlight.choose(
+            folderIsOpen: false,
+            tileCenterX: tileX,
+            tileCenterY: tileY,
+            openSlotCenterX: slotX,
+            openSlotCenterY: slotY
+        )
+        XCTAssertEqual(closed.centerX, tileX, accuracy: 0.001)
+        XCTAssertEqual(closed.centerY, tileY, accuracy: 0.001)
+        XCTAssertEqual(closed.scale, FolderDropFlight.closedScale, accuracy: 0.0001)
+        XCTAssertGreaterThan(closed.scale, 0)
+        XCTAssertLessThan(closed.scale, 1)
+        XCTAssertEqual(closed.opacity, 0, accuracy: 0.001)
+        XCTAssertEqual(FolderDropFlight.duration, 0.28, accuracy: 0.0001)
+        XCTAssertGreaterThan(slotX, panelCenterX)
+        XCTAssertNotEqual(closed.centerX, slotX)
+        XCTAssertNotEqual(closed.centerY, slotY)
+
+        let opened = FolderDropFlight.choose(
+            folderIsOpen: true,
+            tileCenterX: tileX,
+            tileCenterY: tileY,
+            openSlotCenterX: slotX,
+            openSlotCenterY: slotY
+        )
+        XCTAssertEqual(opened.centerX, slotX, accuracy: 0.001)
+        XCTAssertEqual(opened.centerY, slotY, accuracy: 0.001)
+        XCTAssertEqual(opened.scale, 1, accuracy: 0.001)
+        XCTAssertEqual(opened.opacity, 1, accuracy: 0.001)
+    }
 }
