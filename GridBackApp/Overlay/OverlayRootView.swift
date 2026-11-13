@@ -935,6 +935,7 @@ private struct FolderCover: View {
     @State private var titleShown = false
     @State private var closing = false
     @FocusState private var nameFocused: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         GeometryReader { overlay in
@@ -1045,7 +1046,11 @@ private struct FolderCover: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(width: max(icon.side + 12, 64))
-                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .shadow(
+                        color: .black.opacity(usesGlass ? 0.72 : 0.45),
+                        radius: usesGlass ? 3 : 2,
+                        y: 1
+                    )
                     .position(x: icon.centerX, y: icon.centerY + icon.side / 2 + 18)
                     .opacity(id == hiddenID ? 0 : progress)
             }
@@ -1055,16 +1060,7 @@ private struct FolderCover: View {
             value: arrangedIDs
         )
         .frame(width: shape.width, height: shape.height)
-        .background {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Color.white.opacity(0.24))
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.45), lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .folderPanelPlate(cornerRadius: radius)
         .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
         .background {
             GeometryReader { geo in
@@ -1076,6 +1072,10 @@ private struct FolderCover: View {
         }
         .onPreferenceChange(FolderIconFramesKey.self) { iconFrames = $0 }
         .onPreferenceChange(FolderPanelFrameKey.self) { panelFrame = $0 }
+    }
+
+    private var usesGlass: Bool {
+        LiquidGlass.isEnabled && !reduceTransparency
     }
 
     private func iconImage(_ image: NSImage?, side: Double) -> some View {
@@ -1174,6 +1174,67 @@ private final class ScrollCatcherView: NSView {
     deinit {
         if let monitor {
             NSEvent.removeMonitor(monitor)
+        }
+    }
+}
+
+/// The first Liquid Glass slice. Set this to false to keep the previous materials.
+enum LiquidGlass {
+    static let isEnabled = true
+}
+
+extension View {
+    /// Folder panel plate. Reduce Transparency, or a disabled flag, keeps the old material.
+    func folderPanelPlate(cornerRadius: CGFloat) -> some View {
+        modifier(FolderPanelPlate(cornerRadius: cornerRadius))
+    }
+
+    /// Search field plate. Same switch as the folder panel.
+    func searchFieldPlate() -> some View {
+        modifier(SearchFieldPlate())
+    }
+}
+
+private struct FolderPanelPlate: ViewModifier {
+    var cornerRadius: CGFloat
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if LiquidGlass.isEnabled, !reduceTransparency {
+            content
+                .clipShape(shape)
+                .background {
+                    Color.clear.glassEffect(.regular, in: shape)
+                }
+        } else {
+            content
+                .background {
+                    shape
+                        .fill(Color.white.opacity(0.24))
+                        .background(.ultraThinMaterial, in: shape)
+                }
+                .overlay {
+                    shape.strokeBorder(Color.white.opacity(0.45), lineWidth: 1)
+                }
+                .clipShape(shape)
+        }
+    }
+}
+
+private struct SearchFieldPlate: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        let shape = Capsule()
+        if LiquidGlass.isEnabled, !reduceTransparency {
+            content
+                .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                .background {
+                    Color.clear.glassEffect(.regular, in: shape)
+                }
+        } else {
+            content.background(Color.white.opacity(0.16), in: shape)
         }
     }
 }
