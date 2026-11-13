@@ -32,6 +32,11 @@ struct OverlayRootView: View {
     @State private var showingInsertionGap = false
     @State private var holdOpenSuspended = false
     @State private var holdDismiss = false
+    @State private var dropScale: CGFloat = 1
+    @State private var dropOpacity: Double = 1
+    @State private var absorbingIntoFolder = false
+    @State private var pendingClosedDrop: PendingClosedDrop?
+    @State private var closedDropToken = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -114,9 +119,11 @@ struct OverlayRootView: View {
                     )
                 }
 
-                if reorder != nil || folderDragID != nil || returningHome {
+                if reorder != nil || folderDragID != nil || returningHome || absorbingIntoFolder {
                     draggedTile((reorder?.appID ?? folderDragID) ?? "", iconSide: chrome.iconSide)
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+                        .scaleEffect(dropScale)
+                        .opacity(dropOpacity)
                         .position(finger)
                         .allowsHitTesting(false)
                 }
@@ -134,7 +141,7 @@ struct OverlayRootView: View {
                 }
             }
             .coordinateSpace(name: "overlay")
-            .simultaneousGesture(reorderGesture(layout: chrome))
+            .simultaneousGesture(reorderGesture(layout: chrome, overlaySize: overlay.size))
             .background {
                 ScrollCatcher(isEnabled: reorder == nil && !model.isSearching && model.openFolderID == nil) { event in
                     handleScroll(event, pageWidth: chrome.pageWidth, pageCount: model.layout.pages.count)
@@ -148,6 +155,7 @@ struct OverlayRootView: View {
                     abandonDragVisuals()
                     return
                 }
+                guard !absorbingIntoFolder else { return }
                 guard reorder != nil, insertingIntoFolder == nil, let dragLayout else { return }
                 updateReorder(at: finger, layout: dragLayout)
             }
@@ -164,6 +172,9 @@ struct OverlayRootView: View {
             }
             .onChange(of: model.isOverlayVisible) { _, visible in
                 if !visible {
+                    if pendingClosedDrop != nil {
+                        finishClosedFolderDrop()
+                    }
                     returningHome = false
                     releaseDragChrome()
                 }
@@ -220,9 +231,10 @@ struct OverlayRootView: View {
         .frame(width: layout.pageWidth, height: layout.gridHeight, alignment: .leading)
     }
 
-    private func reorderGesture(layout: LaunchGridLayout) -> some Gesture {
+    private func reorderGesture(layout: LaunchGridLayout, overlaySize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
+                if absorbingIntoFolder { return }
                 if insertingIntoFolder != nil {
                     finger = value.location
                     dragLayout = layout
@@ -254,6 +266,7 @@ struct OverlayRootView: View {
                     blockLaunch = true
                     armClock.start()
                     dragSettled = false
+                    resetDropAppearance()
                     model.beginHeldGridDrag(appID: id)
                 }
                 dragLayout = layout
@@ -261,6 +274,7 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
+                if absorbingIntoFolder { return }
                 if model.heldDrag.suppressCommit {
                     abandonDragVisuals()
                     return
@@ -287,6 +301,17 @@ struct OverlayRootView: View {
                 }
                 armClock.stop()
                 if let reorder {
+                    if let armedTarget,
+                       model.layout.folder(armedTarget) != nil,
+                       model.openFolderID != armedTarget {
+                        absorbIntoClosedFolder(
+                            appID: reorder.appID,
+                            folderID: armedTarget,
+                            layout: layout,
+                            overlaySize: overlaySize
+                        )
+                        return
+                    }
                     if let armedTarget {
                         model.group(draggedAppID: reorder.appID, targetID: armedTarget)
                     } else {
@@ -601,13 +626,94 @@ struct OverlayRootView: View {
     private func abandonDragVisuals() {
         pointerHandoff.stop()
         returningHome = false
+        closedDropToken += 1
+        pendingClosedDrop = nil
+        absorbingIntoFolder = false
         reorder = nil
         folderDragID = nil
         folderHandoff = false
         dragSettled = true
+        resetDropAppearance()
         armClock.stop()
         releaseDragChrome()
         clearArmedDrag()
+    }
+
+    /// The folder tile is closed. The icon shrinks into that tile, and the folder saves the app afterwards.
+    private func absorbIntoClosedFolder(appID: String, folderID: String, layout: LaunchGridLayout, overlaySize: CGSize) {
+        let flight = closedFolderFlight(folderID: folderID, layout: layout, overlaySize: overlaySize)
+        releaseDragChrome()
+        clearArmedDrag()
+        if reduceMotion {
+            model.group(draggedAppID: appID, targetID: folderID)
+            reorder = nil
+            folderDragID = nil
+            return
+        }
+        closedDropToken += 1
+        let token = closedDropToken
+        pendingClosedDrop = PendingClosedDrop(appID: appID, folderID: folderID)
+        absorbingIntoFolder = true
+        withAnimation(.easeIn(duration: FolderDropFlight.duration)) {
+            finger = CGPoint(x: flight.centerX, y: flight.centerY)
+            dropScale = CGFloat(flight.scale)
+            dropOpacity = flight.opacity
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + FolderDropFlight.duration) {
+            guard closedDropToken == token else { return }
+            finishClosedFolderDrop()
+        }
+    }
+
+    /// The point the icon would occupy if this closed folder were open, and the tile it should use instead.
+    private func closedFolderFlight(folderID: String, layout: LaunchGridLayout, overlaySize: CGSize) -> FolderDropFlight {
+        let tile = folderTileCenter(
+            folderID,
+            layout: layout,
+            overlaySize: overlaySize,
+            onPage: reorder?.page ?? model.currentPage
+        )
+        let count = (model.layout.folder(folderID)?.appIDs.count ?? 0) + 1
+        let metrics = Self.folderMetrics(layout: layout, appCount: count)
+        let box = FolderPanelMetrics.iconBox(
+            index: count - 1,
+            appCount: count,
+            progress: 1,
+            tileSide: layout.iconSide,
+            open: metrics
+        )
+        return FolderDropFlight.choose(
+            folderIsOpen: false,
+            tileCenterX: Double(tile.x),
+            tileCenterY: Double(tile.y),
+            openSlotCenterX: layout.contentCenterX - metrics.width / 2 + box.centerX,
+            openSlotCenterY: overlaySize.height / 2 - metrics.height / 2 + box.centerY
+        )
+    }
+
+    private func finishClosedFolderDrop() {
+        guard let pending = pendingClosedDrop else { return }
+        pendingClosedDrop = nil
+        closedDropToken += 1
+        model.group(draggedAppID: pending.appID, targetID: pending.folderID)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            absorbingIntoFolder = false
+            reorder = nil
+            folderDragID = nil
+            dropScale = 1
+            dropOpacity = 1
+        }
+    }
+
+    private func resetDropAppearance() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            dropScale = 1
+            dropOpacity = 1
+        }
     }
 
     private func settleReleasedIcon(_ session: GridReorderSession?, layout: LaunchGridLayout) {
@@ -685,8 +791,9 @@ struct OverlayRootView: View {
         return CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
     }
 
-    private func folderTileCenter(_ id: String, layout: LaunchGridLayout, overlaySize: CGSize) -> CGPoint {
-        guard let path = model.layout.indexPath(of: id), path.page == model.currentPage else {
+    private func folderTileCenter(_ id: String, layout: LaunchGridLayout, overlaySize: CGSize, onPage: Int? = nil) -> CGPoint {
+        let page = onPage ?? model.currentPage
+        guard let path = model.layout.indexPath(of: id), path.page == page else {
             return CGPoint(x: overlaySize.width / 2, y: overlaySize.height / 2)
         }
         let pageLeft = overlaySize.width / 2 - layout.pageWidth / 2
@@ -751,6 +858,11 @@ struct OverlayRootView: View {
             .background(color, in: Capsule())
             .shadow(radius: 8, y: 2)
     }
+}
+
+private struct PendingClosedDrop: Equatable {
+    var appID: String
+    var folderID: String
 }
 
 private final class PointerHandoff: ObservableObject {

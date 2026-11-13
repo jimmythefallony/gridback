@@ -512,6 +512,47 @@ public enum FolderInsertionGate {
     }
 }
 
+/// Where a released app icon flies.
+///
+/// A closed folder pulls the icon into the folder tile. The slot inside the
+/// open panel is the other point, and a closed folder does not use it.
+public struct FolderDropFlight: Equatable, Sendable {
+    public var centerX: Double
+    public var centerY: Double
+    /// 1 is the full icon. A closed folder uses a smaller value so the icon shrinks into the tile.
+    public var scale: Double
+    /// 1 is solid. A closed folder fades the icon out as it arrives.
+    public var opacity: Double
+
+    /// Matches the folder closing back into its tile.
+    public static let duration: Double = 0.28
+    /// Mini icons inside a folder tile are the grid icon divided by 3.6.
+    public static let closedScale: Double = 1 / 3.6
+
+    public static func choose(
+        folderIsOpen: Bool,
+        tileCenterX: Double,
+        tileCenterY: Double,
+        openSlotCenterX: Double,
+        openSlotCenterY: Double
+    ) -> FolderDropFlight {
+        if folderIsOpen {
+            return FolderDropFlight(
+                centerX: openSlotCenterX,
+                centerY: openSlotCenterY,
+                scale: 1,
+                opacity: 1
+            )
+        }
+        return FolderDropFlight(
+            centerX: tileCenterX,
+            centerY: tileCenterY,
+            scale: closedScale,
+            opacity: 0
+        )
+    }
+}
+
 public enum FolderEditing {
     /// The folder id that `group` created, if this change made a new folder rather than adding to one.
     public static func createdFolderID(before: Layout, after: Layout) -> String? {
