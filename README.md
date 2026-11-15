@@ -6,7 +6,7 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is version 0.3.3. It is open source, and it is not a finished product.
+This is version 0.3.4. It is open source, and it is not a finished product.
 
 ## Privacy
 
@@ -51,7 +51,6 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
-- The first time the grid opens on a HEIC desktop picture, macOS may write a Hang Risk line to the log. The grid still opens. The message is harmless.
 
 The app is unsigned and not notarized. macOS will warn you the first time you open a downloaded copy. That is expected. See below.
 
@@ -81,7 +80,7 @@ Uninstalling does not turn off Start at login. Remove GridBack in **System Setti
 
 ### Download the zip
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.3.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.4.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 

@@ -330,6 +330,29 @@ final class PicturePreparationTests: XCTestCase {
         XCTAssertGreaterThan(retina.max() ?? 0, 1)
     }
 
+    func testBlurUsesAQuarterOfTheScreenAndTheSameScaleForTheRadius() {
+        let size = WallpaperRenderSize.make(pixelWidth: 3200, pixelHeight: 2000, pointHeight: 1000)
+        XCTAssertEqual(size.width, 800)
+        XCTAssertEqual(size.height, 500)
+        XCTAssertEqual(size.maxPixelSize, 800)
+        let fullSigma = WallpaperRenderSize.pointRadius * 2000 / 1000
+        XCTAssertEqual(size.sigma, fullSigma / Double(WallpaperRenderSize.downscale), accuracy: 0.0001)
+
+        let odd = WallpaperRenderSize.make(pixelWidth: 1001, pixelHeight: 503, pointHeight: 400)
+        XCTAssertEqual(odd.width, 250)
+        XCTAssertEqual(odd.height, 125)
+        XCTAssertEqual(odd.maxPixelSize, 250)
+        XCTAssertEqual(odd.sigma, WallpaperRenderSize.pointRadius * 125 / 400, accuracy: 0.0001)
+    }
+
+    func testBlurSizeNeverDropsBelowOnePixel() {
+        let size = WallpaperRenderSize.make(pixelWidth: 1, pixelHeight: 2, pointHeight: 0)
+        XCTAssertEqual(size.width, 1)
+        XCTAssertEqual(size.height, 1)
+        XCTAssertEqual(size.maxPixelSize, 1)
+        XCTAssertEqual(size.sigma, WallpaperRenderSize.pointRadius)
+    }
+
     func testPictureWorkLeavesTheMainThreadAndAppliesBackOnIt() {
         let finished = expectation(description: "applied on main")
         var workWasOnMain: Bool?

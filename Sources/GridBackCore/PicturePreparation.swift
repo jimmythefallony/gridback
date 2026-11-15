@@ -64,19 +64,55 @@ public enum WallpaperBackdropChoice {
     }
 }
 
+/// Pixel size of the blurred desktop picture, and the blur radius that matches it.
+/// The picture is a quarter of the screen. The radius uses that same scale, so the
+/// blur still reads the same when the picture is shown full screen.
+public struct WallpaperRenderSize: Equatable, Sendable {
+    public var width: Int
+    public var height: Int
+    /// Longest side to request from the image decoder, in pixels.
+    public var maxPixelSize: Int
+    public var sigma: Double
+
+    public static let downscale = 4
+    /// On-screen blur radius, in points, before it is scaled to the bitmap.
+    public static let pointRadius = 52.0
+
+    public init(width: Int, height: Int, maxPixelSize: Int, sigma: Double) {
+        self.width = width
+        self.height = height
+        self.maxPixelSize = maxPixelSize
+        self.sigma = sigma
+    }
+
+    public static func make(pixelWidth: Int, pixelHeight: Int, pointHeight: Double) -> WallpaperRenderSize {
+        let width = max(pixelWidth / downscale, 1)
+        let height = max(pixelHeight / downscale, 1)
+        let sigma = pointRadius * Double(height) / max(pointHeight, 1)
+        return WallpaperRenderSize(
+            width: width,
+            height: height,
+            maxPixelSize: max(width, height),
+            sigma: sigma
+        )
+    }
+}
+
 /// Runs picture preparation off the main thread, then delivers the result on main.
-/// The main thread does not wait, so it cannot block on lower-priority work.
+/// The work stays at Default QoS, the same class ImageIO uses to decode, so this
+/// thread does not wait on a lower one. The main thread does not wait either.
 public enum OffMainWork {
     private static let queue = DispatchQueue(
         label: "com.jimmythefallony.GridBack.picture",
-        qos: .userInitiated
+        qos: .default
     )
 
     public static func start<T>(
         work: @escaping () -> T,
         apply: @escaping (T) -> Void
     ) {
-        queue.async {
+        // Keep Default even when the caller is the main thread.
+        queue.async(qos: .default, flags: .enforceQoS) {
             let value = work()
             DispatchQueue.main.async {
                 apply(value)
