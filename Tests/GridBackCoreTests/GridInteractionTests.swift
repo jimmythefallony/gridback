@@ -833,7 +833,7 @@ final class WallpaperClassificationTests: XCTestCase {
             entry: choiceEntry(provider: WallpaperProviderRole.aerials, configuration: ["assetID": "night-city"])
         )
         let choice = WallpaperStoreIndex.choice(in: store, displayUUID: "display-1")
-        XCTAssertEqual(choice?.role, .notAPicture)
+        XCTAssertEqual(choice?.role, .aerial)
         let selection = WallpaperSelectionResolver.select(
             configured: choice,
             workspacePath: WallpaperReportedImage.systemDefaultPath
@@ -845,9 +845,10 @@ final class WallpaperClassificationTests: XCTestCase {
             imageCount: 1,
             appearance: .dark,
             fileIsDirectory: false,
-            solidFillAvailable: false
+            solidFillAvailable: false,
+            plainReason: .aerial
         )
-        XCTAssertEqual(plan, .plainBlur(kind: .aerialOrUnknown))
+        XCTAssertEqual(plan, .plainBlur(kind: .aerialOrUnknown, reason: .aerial))
     }
 
     func testADynamicFileIsReadEvenWhenTheWorkspaceURLIsTheSystemDefault() {
@@ -875,7 +876,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: false
             ),
-            .picture(path: path, index: 1, kind: .lightDark)
+            .picture(path: path, index: 1, kind: .lightDark, reason: .lightDark)
         )
         let solar = WallpaperMetadataDecoder.hints(
             aprBase64: nil,
@@ -891,7 +892,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: false
             ),
-            .plainBlur(kind: .timeBased)
+            .plainBlur(kind: .timeBased, reason: .timeOfDay)
         )
     }
 
@@ -930,7 +931,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: true
             ),
-            .picture(path: path, index: 0, kind: .still)
+            .picture(path: path, index: 0, kind: .still, reason: .still)
         )
     }
 
@@ -954,7 +955,7 @@ final class WallpaperClassificationTests: XCTestCase {
         )
         XCTAssertEqual(
             WallpaperStoreIndex.choice(in: store, displayUUID: "OTHER")?.role,
-            .notAPicture
+            .aerial
         )
     }
 
@@ -1019,7 +1020,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: true,
                 solidFillAvailable: false
             ),
-            .plainBlur(kind: .aerialOrUnknown)
+            .plainBlur(kind: .fallback, reason: .unreadable)
         )
         XCTAssertEqual(
             WallpaperBackdropPlanner.plan(
@@ -1030,7 +1031,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: false
             ),
-            .plainBlur(kind: .aerialOrUnknown)
+            .plainBlur(kind: .fallback, reason: .unreadable)
         )
     }
 
@@ -1049,7 +1050,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: true
             ),
-            .solidColor(kind: .still)
+            .solidColor(kind: .solidColor, reason: .solidColor)
         )
         XCTAssertEqual(
             WallpaperBackdropPlanner.plan(
@@ -1060,7 +1061,7 @@ final class WallpaperClassificationTests: XCTestCase {
                 fileIsDirectory: false,
                 solidFillAvailable: false
             ),
-            .plainBlur(kind: .aerialOrUnknown)
+            .plainBlur(kind: .fallback, reason: .unreadable)
         )
     }
 
@@ -1095,6 +1096,164 @@ final class WallpaperClassificationTests: XCTestCase {
         )
     }
 
+    func testADesktopPicturesLightDarkFileIsNotThePlaceholder() {
+        let path = "/System/Library/Desktop Pictures/Golden Gate.heic"
+        XCTAssertFalse(WallpaperReportedImage.isSystemDefault(path))
+        XCTAssertTrue(WallpaperReportedImage.isSystemDefault(WallpaperReportedImage.systemDefaultPath))
+        XCTAssertTrue(WallpaperReportedImage.isSystemDefault("/System/Volumes/Data" + WallpaperReportedImage.systemDefaultPath))
+        let hints = WallpaperMetadataDecoder.hints(aprBase64: knownAppearancePayload, h24Base64: nil, solarBase64: nil)
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: path),
+                hints: hints,
+                imageCount: 2,
+                appearance: .dark,
+                fileIsDirectory: false,
+                solidFillAvailable: false
+            ),
+            .picture(path: path, index: 1, kind: .lightDark, reason: .lightDark)
+        )
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: path),
+                hints: hints,
+                imageCount: 2,
+                appearance: .light,
+                fileIsDirectory: false,
+                solidFillAvailable: true
+            ),
+            .picture(path: path, index: 0, kind: .lightDark, reason: .lightDark)
+        )
+    }
+
+    func testANamedDynamicPictureIsUsedWhenTheWorkspaceURLIsThePlaceholder() {
+        let resolved = "/System/Library/Desktop Pictures/Golden Gate.heic"
+        XCTAssertTrue(WallpaperSystemPicture.candidatePaths(name: "Golden Gate").contains(resolved))
+        let store = wallpaperStore(
+            display: "DISPLAY-1",
+            entry: choiceEntry(
+                provider: WallpaperProviderRole.dynamic,
+                configuration: ["name": "Golden Gate"]
+            )
+        )
+        let choice = WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")
+        XCTAssertEqual(choice?.pictureName, "Golden Gate")
+        let resolvedChoice = WallpaperConfiguredChoice(role: .file(path: resolved), pictureName: "Golden Gate")
+        XCTAssertEqual(
+            WallpaperSelectionResolver.select(
+                configured: resolvedChoice,
+                workspacePath: WallpaperReportedImage.systemDefaultPath
+            ),
+            .file(path: resolved)
+        )
+    }
+
+    func testANewerLightDarkFileBeatsAnOlderAerial() {
+        let path = "/System/Library/Desktop Pictures/Golden Gate.heic"
+        let olderAerial = choiceEntry(
+            provider: WallpaperProviderRole.aerials,
+            configuration: ["assetID": "night-city"],
+            lastSet: 10
+        )
+        let newerPicture = choiceEntry(
+            provider: WallpaperProviderRole.dynamic,
+            configuration: ["url": ["relative": URL(fileURLWithPath: path).absoluteString]],
+            lastSet: 20
+        )
+        let store: [String: Any] = [
+            "Displays": ["DISPLAY-1": olderAerial],
+            "AllSpacesAndDisplays": newerPicture
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")?.role,
+            .file(path: path)
+        )
+    }
+
+    func testANewerAerialBeatsAnOlderPicture() {
+        let path = "/System/Library/Desktop Pictures/Old.heic"
+        let store: [String: Any] = [
+            "Displays": [
+                "DISPLAY-1": choiceEntry(
+                    provider: WallpaperProviderRole.aerials,
+                    configuration: ["assetID": "clip"],
+                    lastSet: 50
+                )
+            ],
+            "AllSpacesAndDisplays": choiceEntry(
+                provider: WallpaperProviderRole.dynamic,
+                configuration: ["url": URL(fileURLWithPath: path).absoluteString],
+                lastSet: 10
+            )
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")?.role,
+            .aerial
+        )
+    }
+
+    func testAStoredBackgroundColourIsUsedWhenTheReportedFileIsThePlaceholder() {
+        let orange = WallpaperColorComponents.color(from: ["components": [1.0, 0.4, 0.1, 1.0]])
+        XCTAssertEqual(orange?.red ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(orange?.green ?? -1, 0.4, accuracy: 0.001)
+        let entry = choiceEntry(
+            provider: WallpaperProviderRole.image,
+            configuration: [
+                "url": ["relative": URL(fileURLWithPath: WallpaperReportedImage.systemDefaultPath).absoluteString],
+                "backgroundColor": ["components": [1.0, 0.4, 0.1, 1.0]]
+            ]
+        )
+        let choice = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)
+        XCTAssertEqual(choice?.role, .solidColor)
+        XCTAssertEqual(choice?.color?.red ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(choice?.color?.blue ?? -1, 0.1, accuracy: 0.001)
+        let plan = WallpaperBackdropPlanner.plan(
+            selection: .plainBlur,
+            hints: .none,
+            imageCount: 0,
+            appearance: .dark,
+            fileIsDirectory: false,
+            solidFillAvailable: false,
+            knownColor: choice?.color,
+            plainReason: .placeholderUnidentified
+        )
+        XCTAssertEqual(plan, .solidColor(kind: .solidColor, reason: .solidColor))
+        XCTAssertTrue(
+            WallpaperSolidFill.applies(
+                selection: .plainBlur,
+                hasWorkspaceImage: true,
+                hasFillColor: true,
+                workspaceIsPlaceholder: true
+            )
+        )
+    }
+
+    func testATinyImageUsesItsOwnColourAndAHomePathIsNotLogged() {
+        XCTAssertTrue(WallpaperImageExtent.isTinySolidCandidate(pixelWidth: 8, pixelHeight: 8))
+        XCTAssertFalse(WallpaperImageExtent.isTinySolidCandidate(pixelWidth: 800, pixelHeight: 500))
+        let home = "/Users/someone/Library/Application Support/com.apple.wallpaper/colors/swatch.png"
+        XCTAssertEqual(WallpaperLogName.fileName(path: home), "swatch.png")
+        XCTAssertFalse(WallpaperLogName.fileName(path: home).contains("someone"))
+        XCTAssertEqual(
+            WallpaperLogName.fileName(path: "/System/Library/Desktop Pictures/Golden Gate.heic"),
+            "Golden Gate.heic"
+        )
+        let color = WallpaperSolidColor(red: 0.8, green: 0.2, blue: 0.1)
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: home),
+                hints: .none,
+                imageCount: 1,
+                appearance: .dark,
+                fileIsDirectory: false,
+                solidFillAvailable: false,
+                knownColor: color,
+                imageIsTiny: true
+            ),
+            .solidColor(kind: .solidColor, reason: .solidImage)
+        )
+    }
+
     private func base64Plist(_ object: [String: Any]) -> String {
         binaryPlist(object).base64EncodedString()
     }
@@ -1103,17 +1262,19 @@ final class WallpaperClassificationTests: XCTestCase {
         try! PropertyListSerialization.data(fromPropertyList: object, format: .binary, options: 0)
     }
 
-    private func choiceEntry(provider: String, configuration: [String: Any]) -> [String: Any] {
-        [
-            "Desktop": [
-                "Content": [
-                    "Choices": [[
-                        "Provider": provider,
-                        "Configuration": binaryPlist(configuration)
-                    ] as [String: Any]] as [Any]
-                ]
+    private func choiceEntry(provider: String, configuration: [String: Any], lastSet: TimeInterval = 0) -> [String: Any] {
+        var desktop: [String: Any] = [
+            "Content": [
+                "Choices": [[
+                    "Provider": provider,
+                    "Configuration": binaryPlist(configuration)
+                ] as [String: Any]] as [Any]
             ]
         ]
+        if lastSet > 0 {
+            desktop["LastSet"] = Date(timeIntervalSince1970: lastSet)
+        }
+        return ["Desktop": desktop]
     }
 
     private func wallpaperStore(display: String, entry: [String: Any]) -> [String: Any] {

@@ -27,8 +27,9 @@ final class OverlayController: NSObject {
     /// Wallpaper identity prepared for the next open, including while the grid is closed.
     private var preparedKey: String?
     private var inflightPictureKey: String?
-    /// Last blur identity written to the log, so one open does not repeat it.
-    private var loggedPictureKey: String?
+    /// Last decision written to the log, so one open records one line.
+    private var loggedDecision = ""
+    private var loggedGeneration = -1
     /// System appearance last used for the blur. The grid window's own appearance is not this.
     private var lastSystemAppearance: WallpaperAppearance?
     private var appearanceObservation: NSKeyValueObservation?
@@ -69,7 +70,6 @@ final class OverlayController: NSObject {
         }
         wantsGrid = true
         showGeneration += 1
-        loggedPictureKey = nil
         let generation = showGeneration
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
@@ -311,9 +311,12 @@ final class OverlayController: NSObject {
     }
 
     private func notePicture(_ job: DesktopPictureJob) {
-        guard loggedPictureKey != job.cacheKey else { return }
-        loggedPictureKey = job.cacheKey
-        log.info("DesktopPicture kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public)")
+        let file = WallpaperLogName.fileName(path: job.url?.path ?? job.logPath)
+        let line = "kind=\(job.kind.rawValue) appearance=\(job.appearance.rawValue) reportedDefault=\(job.reportedSystemDefault) reason=\(job.reason.rawValue) file=\(file)"
+        guard showGeneration != loggedGeneration || line != loggedDecision else { return }
+        loggedGeneration = showGeneration
+        loggedDecision = line
+        log.info("DesktopPicture \(line, privacy: .public)")
     }
 
     private func startPictureRender(_ job: DesktopPictureJob, generation: Int) {
@@ -517,6 +520,9 @@ struct DesktopPictureJob {
     var kind: WallpaperKind
     var appearance: WallpaperAppearance
     var reportedSystemDefault: Bool
+    var reason: WallpaperDecisionReason
+    /// Path used only to name the file in the log. Not a picture to decode.
+    var logPath: String?
     var solidColor: WallpaperSolidColor?
     var pointSize: NSSize
     var pixelWidth: Int
@@ -550,20 +556,29 @@ enum DesktopPicture {
     static func job(on screen: NSScreen) -> DesktopPictureJob {
         let appearance = systemAppearance()
         let workspaceURL = NSWorkspace.shared.desktopImageURL(for: screen)?.standardizedFileURL
-        let configured = WallpaperStoreReader.choice(for: screen)
-        let selection = WallpaperSelectionResolver.select(
-            configured: configured,
-            workspacePath: workspaceURL?.path
-        )
-        let fill = solidColor(on: screen)
-        let solidFill = WallpaperSolidFill.applies(
-            selection: selection,
-            hasWorkspaceImage: workspaceURL != nil,
-            hasFillColor: fill != nil
-        )
+        let workspacePath = workspaceURL?.path
+        let placeholder = workspacePath.map(WallpaperReportedImage.isSystemDefault) ?? false
+        var configured = WallpaperStoreReader.choice(for: screen)
+        if let name = configured?.pictureName,
+           configured?.role != .solidColor,
+           configured?.role != .aerial,
+           !hasRealFile(configured),
+           let resolved = WallpaperPictureLocator.existingPicture(named: name) {
+            configured = WallpaperConfiguredChoice(
+                role: .file(path: resolved),
+                color: configured?.color,
+                pictureName: name,
+                lastSet: configured?.lastSet ?? 0
+            )
+        }
+        let selection = WallpaperSelectionResolver.select(configured: configured, workspacePath: workspacePath)
+        let optionsFill = solidColor(on: screen)
         var hints = WallpaperMetadataHints.none
         var imageCount = 0
+        var pixelWidth = 0
+        var pixelHeight = 0
         var fileIsDirectory = false
+        var sampled: WallpaperSolidColor?
         if case .file(let path) = selection {
             var directory: ObjCBool = false
             if FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue {
@@ -572,15 +587,33 @@ enum DesktopPicture {
                 let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
                 hints = read.hints
                 imageCount = read.imageCount
+                pixelWidth = read.pixelWidth
+                pixelHeight = read.pixelHeight
+                if WallpaperImageExtent.isTinySolidCandidate(pixelWidth: pixelWidth, pixelHeight: pixelHeight) {
+                    sampled = WallpaperFileMetadata.averageColor(at: URL(fileURLWithPath: path))
+                }
             }
         }
+        let tiny = WallpaperImageExtent.isTinySolidCandidate(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        let substantialPicture = imageCount > 0 && !fileIsDirectory && !tiny
+        let knownColor = resolvedColor(
+            sampled: sampled,
+            stored: configured?.color,
+            options: optionsFill,
+            aerial: configured?.role == .aerial,
+            substantialPicture: substantialPicture
+        )
+        let plainReason = plainDecisionReason(configured: configured, placeholder: placeholder)
         let plan = WallpaperBackdropPlanner.plan(
             selection: selection,
             hints: hints,
             imageCount: imageCount,
             appearance: appearance,
             fileIsDirectory: fileIsDirectory,
-            solidFillAvailable: solidFill
+            solidFillAvailable: knownColor != nil,
+            knownColor: knownColor,
+            imageIsTiny: tiny,
+            plainReason: plainReason
         )
         let scale = max(screen.backingScaleFactor, 1)
         let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
@@ -589,22 +622,26 @@ enum DesktopPicture {
         let imageIndex: Int
         let color: WallpaperSolidColor?
         let token: String
+        let logPath: String?
         switch plan {
-        case .picture(let path, let index, _):
+        case .picture(let path, let index, _, _):
             url = URL(fileURLWithPath: path)
             imageIndex = index
             color = nil
             token = path
+            logPath = path
         case .solidColor:
             url = nil
             imageIndex = 0
-            color = fill
-            token = colorToken(fill)
+            color = knownColor ?? optionsFill
+            token = colorToken(color)
+            logPath = selectionPath(selection)
         case .plainBlur:
             url = nil
             imageIndex = 0
             color = nil
             token = "plain"
+            logPath = selectionPath(selection)
         }
         return DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
@@ -619,7 +656,9 @@ enum DesktopPicture {
             imageIndex: imageIndex,
             kind: plan.kind,
             appearance: appearance,
-            reportedSystemDefault: workspaceURL.map { WallpaperReportedImage.isSystemDefault($0.path) } ?? false,
+            reportedSystemDefault: placeholder,
+            reason: plan.reason,
+            logPath: logPath,
             solidColor: color,
             pointSize: screen.frame.size,
             pixelWidth: pixelW,
@@ -629,6 +668,37 @@ enum DesktopPicture {
             screenWidth: Double(screen.frame.size.width),
             screenHeight: Double(screen.frame.size.height)
         )
+    }
+
+    private static func resolvedColor(
+        sampled: WallpaperSolidColor?,
+        stored: WallpaperSolidColor?,
+        options: WallpaperSolidColor?,
+        aerial: Bool,
+        substantialPicture: Bool
+    ) -> WallpaperSolidColor? {
+        if let sampled { return sampled }
+        if aerial || substantialPicture { return nil }
+        return stored ?? options
+    }
+
+    private static func hasRealFile(_ choice: WallpaperConfiguredChoice?) -> Bool {
+        guard let choice, case .file(let path) = choice.role else { return false }
+        return !WallpaperReportedImage.isSystemDefault(path)
+    }
+
+    private static func selectionPath(_ selection: WallpaperSelection) -> String? {
+        if case .file(let path) = selection { return path }
+        return nil
+    }
+
+    private static func plainDecisionReason(
+        configured: WallpaperConfiguredChoice?,
+        placeholder: Bool
+    ) -> WallpaperDecisionReason {
+        if configured?.role == .aerial { return .aerial }
+        if placeholder { return .placeholderUnidentified }
+        return .noPicture
     }
 
     private static func colorToken(_ color: WallpaperSolidColor?) -> String {
@@ -645,7 +715,7 @@ enum DesktopPicture {
     private static func solidColor(on screen: NSScreen) -> WallpaperSolidColor? {
         guard let options = NSWorkspace.shared.desktopImageOptions(for: screen),
               let color = options[.fillColor] as? NSColor,
-              let rgb = color.usingColorSpace(.sRGB) else { return nil }
+              let rgb = color.usingColorSpace(.sRGB) ?? color.usingColorSpace(.deviceRGB) else { return nil }
         func unit(_ value: CGFloat) -> Double { Double(min(max(value, 0), 1)) }
         return WallpaperSolidColor(red: unit(rgb.redComponent), green: unit(rgb.greenComponent), blue: unit(rgb.blueComponent))
     }
@@ -773,6 +843,17 @@ enum DesktopPicture {
 
 /// The wallpaper the system recorded for this display. Missing or unreadable means
 /// the workspace image URL is the only picture available.
+enum WallpaperPictureLocator {
+    static func existingPicture(named name: String) -> String? {
+        for path in WallpaperSystemPicture.candidatePaths(name: name) {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+}
+
 enum WallpaperStoreReader {
     static func choice(for screen: NSScreen) -> WallpaperConfiguredChoice? {
         let url = FileManager.default.homeDirectoryForCurrentUser
@@ -796,13 +877,14 @@ enum WallpaperStoreReader {
 /// `apr`, `h24`, and `solar` on a HEIC file. The tag is only a hint: the value is
 /// a property list in base 64, and a tag with no usable value still counts as present.
 enum WallpaperFileMetadata {
-    static func read(at url: URL) -> (hints: WallpaperMetadataHints, imageCount: Int) {
+    static func read(at url: URL) -> (hints: WallpaperMetadataHints, imageCount: Int, pixelWidth: Int, pixelHeight: Int) {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
-            return (.none, 0)
+            return (.none, 0, 0, 0)
         }
         let count = CGImageSourceGetCount(source)
-        guard count > 0 else { return (.none, 0) }
+        guard count > 0 else { return (.none, 0, 0, 0) }
+        let size = pixelSize(of: source)
         var apr: String?
         var day: String?
         var solar: String?
@@ -813,7 +895,47 @@ enum WallpaperFileMetadata {
             day = day ?? tag("apple_desktop:h24", in: metadata)
             solar = solar ?? tag("apple_desktop:solar", in: metadata)
         }
-        return (WallpaperMetadataDecoder.hints(aprBase64: apr, h24Base64: day, solarBase64: solar), count)
+        return (WallpaperMetadataDecoder.hints(aprBase64: apr, h24Base64: day, solarBase64: solar), count, size.width, size.height)
+    }
+
+    /// One pixel from a very small picture. Large files are not decoded here.
+    static func averageColor(at url: URL) -> WallpaperSolidColor? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
+            return nil
+        }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        guard let context = CGContext(
+            data: &pixel,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return WallpaperSolidColor(
+            red: Double(pixel[0]) / 255,
+            green: Double(pixel[1]) / 255,
+            blue: Double(pixel[2]) / 255
+        )
+    }
+
+    private static func pixelSize(of source: CGImageSource) -> (width: Int, height: Int) {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return (0, 0)
+        }
+        let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        return (width, height)
     }
 
     private static func tag(_ name: String, in metadata: CGImageMetadata) -> String? {
