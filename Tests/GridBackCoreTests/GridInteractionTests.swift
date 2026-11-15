@@ -738,3 +738,385 @@ final class PageSnapTests: XCTestCase {
         XCTAssertEqual(visual, 1.25, accuracy: 0.001)
     }
 }
+
+final class WallpaperClassificationTests: XCTestCase {
+    private let knownAppearancePayload = "YnBsaXN0MDDSAQIDBFFsUWQQABABCA0PERMAAAAAAAABAQAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAFQ=="
+
+    func testAppearancePayloadNamesTheLightAndDarkFrames() {
+        let pair = WallpaperMetadataDecoder.appearanceIndices(base64: knownAppearancePayload)
+        XCTAssertEqual(pair?.light, 0)
+        XCTAssertEqual(pair?.dark, 1)
+        let hints = WallpaperMetadataDecoder.hints(aprBase64: knownAppearancePayload, h24Base64: nil, solarBase64: nil)
+        XCTAssertEqual(WallpaperClassifier.kind(hints: hints, imageCount: 2), .lightDark)
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .lightDark, hints: hints, appearance: .light, imageCount: 2),
+            .index(0)
+        )
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .lightDark, hints: hints, appearance: .dark, imageCount: 2),
+            .index(1)
+        )
+    }
+
+    func testLightAndDarkIndicesNeedNotBeTheFirstTwoFrames() {
+        let hints = WallpaperMetadataDecoder.hints(
+            aprBase64: base64Plist(["l": 2, "d": 5]),
+            h24Base64: nil,
+            solarBase64: nil
+        )
+        XCTAssertEqual(hints.lightIndex, 2)
+        XCTAssertEqual(hints.darkIndex, 5)
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .lightDark, hints: hints, appearance: .dark, imageCount: 8),
+            .index(5)
+        )
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .lightDark, hints: hints, appearance: .dark, imageCount: 4),
+            .plainBlur
+        )
+    }
+
+    func testABrokenAppearanceHintDoesNotGuessAFrame() {
+        let hints = WallpaperMetadataDecoder.hints(aprBase64: "not-a-plist", h24Base64: nil, solarBase64: nil)
+        XCTAssertTrue(hints.hasAppearanceTag)
+        XCTAssertNil(hints.lightIndex)
+        XCTAssertNil(hints.darkIndex)
+        XCTAssertEqual(WallpaperClassifier.kind(hints: hints, imageCount: 2), .lightDark)
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .lightDark, hints: hints, appearance: .light, imageCount: 2),
+            .plainBlur
+        )
+    }
+
+    func testTimeOfDayWinsOverAppearanceAndIsNotAFrame() {
+        let solar = base64Plist([
+            "ap": ["l": 0, "d": 1],
+            "si": [["i": 0, "a": 10, "z": 90]]
+        ])
+        let hints = WallpaperMetadataDecoder.hints(
+            aprBase64: knownAppearancePayload,
+            h24Base64: nil,
+            solarBase64: solar
+        )
+        XCTAssertTrue(hints.hasTimeOfDay)
+        XCTAssertEqual(WallpaperClassifier.kind(hints: hints, imageCount: 8), .timeBased)
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .timeBased, hints: hints, appearance: .dark, imageCount: 8),
+            .plainBlur
+        )
+
+        let solarOnly = WallpaperMetadataDecoder.hints(aprBase64: nil, h24Base64: nil, solarBase64: solar)
+        XCTAssertFalse(solarOnly.hasAppearanceTag)
+        XCTAssertEqual(WallpaperClassifier.kind(hints: solarOnly, imageCount: 8), .timeBased)
+
+        let byHour = WallpaperMetadataDecoder.hints(
+            aprBase64: nil,
+            h24Base64: base64Plist(["ti": [["i": 0, "t": 0.5]]]),
+            solarBase64: nil
+        )
+        XCTAssertEqual(WallpaperClassifier.kind(hints: byHour, imageCount: 4), .timeBased)
+    }
+
+    func testAStillPictureUsesTheFirstFrame() {
+        let hints = WallpaperMetadataHints.none
+        XCTAssertEqual(WallpaperClassifier.kind(hints: hints, imageCount: 1), .still)
+        XCTAssertEqual(
+            WallpaperClassifier.frame(kind: .still, hints: hints, appearance: .dark, imageCount: 1),
+            .index(0)
+        )
+        XCTAssertEqual(WallpaperClassifier.kind(hints: hints, imageCount: 0), .aerialOrUnknown)
+    }
+
+    func testTheSystemDefaultPictureIsNotUsedWhenTheWallpaperIsMoving() {
+        let store = wallpaperStore(
+            display: "DISPLAY-1",
+            entry: choiceEntry(provider: WallpaperProviderRole.aerials, configuration: ["assetID": "night-city"])
+        )
+        let choice = WallpaperStoreIndex.choice(in: store, displayUUID: "display-1")
+        XCTAssertEqual(choice?.role, .notAPicture)
+        let selection = WallpaperSelectionResolver.select(
+            configured: choice,
+            workspacePath: WallpaperReportedImage.systemDefaultPath
+        )
+        XCTAssertEqual(selection, .plainBlur)
+        let plan = WallpaperBackdropPlanner.plan(
+            selection: selection,
+            hints: WallpaperMetadataHints.none,
+            imageCount: 1,
+            appearance: .dark,
+            fileIsDirectory: false,
+            solidFillAvailable: false
+        )
+        XCTAssertEqual(plan, .plainBlur(kind: .aerialOrUnknown))
+    }
+
+    func testADynamicFileIsReadEvenWhenTheWorkspaceURLIsTheSystemDefault() {
+        let path = "/System/Library/Desktop Pictures/Peaks.heic"
+        let store = wallpaperStore(
+            display: "DISPLAY-1",
+            entry: choiceEntry(
+                provider: WallpaperProviderRole.dynamic,
+                configuration: ["url": ["relative": URL(fileURLWithPath: path).absoluteString]]
+            )
+        )
+        let choice = WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")
+        let selection = WallpaperSelectionResolver.select(
+            configured: choice,
+            workspacePath: WallpaperReportedImage.systemDefaultPath
+        )
+        XCTAssertEqual(selection, .file(path: path))
+        let hints = WallpaperMetadataDecoder.hints(aprBase64: knownAppearancePayload, h24Base64: nil, solarBase64: nil)
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: selection,
+                hints: hints,
+                imageCount: 2,
+                appearance: .dark,
+                fileIsDirectory: false,
+                solidFillAvailable: false
+            ),
+            .picture(path: path, index: 1, kind: .lightDark)
+        )
+        let solar = WallpaperMetadataDecoder.hints(
+            aprBase64: nil,
+            h24Base64: nil,
+            solarBase64: base64Plist(["si": [["i": 3]]])
+        )
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: selection,
+                hints: solar,
+                imageCount: 6,
+                appearance: .light,
+                fileIsDirectory: false,
+                solidFillAvailable: false
+            ),
+            .plainBlur(kind: .timeBased)
+        )
+    }
+
+    func testAMatchingStillAndAnUnreadableStoreBothUseTheWorkspaceFile() {
+        let path = "/Library/Desktop Pictures/Still.heic"
+        let store = wallpaperStore(
+            display: "DISPLAY-1",
+            entry: choiceEntry(
+                provider: WallpaperProviderRole.image,
+                configuration: ["type": "imageFile", "url": ["relative": URL(fileURLWithPath: path).absoluteString]]
+            )
+        )
+        let choice = WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")
+        XCTAssertEqual(
+            WallpaperSelectionResolver.select(configured: choice, workspacePath: path),
+            .file(path: path)
+        )
+        XCTAssertEqual(
+            WallpaperSelectionResolver.select(configured: nil, workspacePath: path),
+            .file(path: path)
+        )
+        XCTAssertEqual(
+            WallpaperSelectionResolver.select(configured: nil, workspacePath: nil),
+            .plainBlur
+        )
+        XCTAssertEqual(
+            WallpaperSelectionResolver.select(configured: choice, workspacePath: "/Library/Desktop Pictures/Other.jpg"),
+            .file(path: "/Library/Desktop Pictures/Other.jpg")
+        )
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: path),
+                hints: .none,
+                imageCount: 1,
+                appearance: .light,
+                fileIsDirectory: false,
+                solidFillAvailable: true
+            ),
+            .picture(path: path, index: 0, kind: .still)
+        )
+    }
+
+    func testPerDisplayChoiceBeatsTheGlobalOneAndAMissingDisplayFallsThrough() {
+        let photo = "/Library/Desktop Pictures/Desk.jpg"
+        let store: [String: Any] = [
+            "Displays": [
+                "DISPLAY-1": choiceEntry(
+                    provider: WallpaperProviderRole.image,
+                    configuration: ["url": URL(fileURLWithPath: photo).absoluteString]
+                )
+            ],
+            "AllSpacesAndDisplays": choiceEntry(
+                provider: WallpaperProviderRole.aerials,
+                configuration: ["assetID": "aerial"]
+            )
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: store, displayUUID: "DISPLAY-1")?.role,
+            .file(path: photo)
+        )
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: store, displayUUID: "OTHER")?.role,
+            .notAPicture
+        )
+    }
+
+    func testAnOlderFilesEntryAndALinkedColourChoiceAreRead() {
+        let path = "/Library/Desktop Pictures/Legacy.jpg"
+        let filesEntry: [String: Any] = [
+            "Desktop": [
+                "Content": [
+                    "Choices": [[
+                        "Provider": WallpaperProviderRole.image,
+                        "Files": [["relative": URL(fileURLWithPath: path).absoluteString]]
+                    ] as [String: Any]] as [Any]
+                ]
+            ]
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: ["SystemDefault": filesEntry], displayUUID: nil)?.role,
+            .file(path: path)
+        )
+
+        let linked: [String: Any] = [
+            "Type": "linked",
+            "Linked": [
+                "Content": [
+                    "Choices": [[
+                        "Provider": "com.apple.wallpaper.choice.color",
+                        "Configuration": binaryPlist(["type": "color"])
+                    ] as [String: Any]] as [Any]
+                ]
+            ]
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": linked], displayUUID: nil)?.role,
+            .solidColor
+        )
+    }
+
+    func testSeveralPicturesAtOnceAreNotOneFrame() {
+        let entry: [String: Any] = [
+            "Desktop": [
+                "Content": [
+                    "Choices": [
+                        ["Provider": WallpaperProviderRole.image, "Configuration": binaryPlist(["url": "/a.jpg"])] as [String: Any],
+                        ["Provider": WallpaperProviderRole.image, "Configuration": binaryPlist(["url": "/b.jpg"])] as [String: Any]
+                    ] as [Any]
+                ]
+            ]
+        ]
+        XCTAssertEqual(
+            WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)?.role,
+            .notAPicture
+        )
+    }
+
+    func testAFolderAndAnEmptyFileAreNotShownAsAPicture() {
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: "/Library/Desktop Pictures"),
+                hints: .none,
+                imageCount: 3,
+                appearance: .light,
+                fileIsDirectory: true,
+                solidFillAvailable: false
+            ),
+            .plainBlur(kind: .aerialOrUnknown)
+        )
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .file(path: "/missing.heic"),
+                hints: .none,
+                imageCount: 0,
+                appearance: .dark,
+                fileIsDirectory: false,
+                solidFillAvailable: false
+            ),
+            .plainBlur(kind: .aerialOrUnknown)
+        )
+    }
+
+    func testSolidColourUsesTheFillOnlyWhenItIsTheWallpaper() {
+        XCTAssertFalse(WallpaperSolidFill.applies(selection: .file(path: "/a.jpg"), hasWorkspaceImage: true, hasFillColor: true))
+        XCTAssertFalse(WallpaperSolidFill.applies(selection: .plainBlur, hasWorkspaceImage: true, hasFillColor: true))
+        XCTAssertTrue(WallpaperSolidFill.applies(selection: .plainBlur, hasWorkspaceImage: false, hasFillColor: true))
+        XCTAssertTrue(WallpaperSolidFill.applies(selection: .solidColor, hasWorkspaceImage: true, hasFillColor: true))
+        XCTAssertFalse(WallpaperSolidFill.applies(selection: .solidColor, hasWorkspaceImage: false, hasFillColor: false))
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .solidColor,
+                hints: .none,
+                imageCount: 0,
+                appearance: .dark,
+                fileIsDirectory: false,
+                solidFillAvailable: true
+            ),
+            .solidColor(kind: .still)
+        )
+        XCTAssertEqual(
+            WallpaperBackdropPlanner.plan(
+                selection: .solidColor,
+                hints: .none,
+                imageCount: 0,
+                appearance: .light,
+                fileIsDirectory: false,
+                solidFillAvailable: false
+            ),
+            .plainBlur(kind: .aerialOrUnknown)
+        )
+    }
+
+    func testAppearanceIsPartOfTheBlurCacheKey() {
+        let light = WallpaperCacheIdentity.key(
+            token: "/Library/Desktop Pictures/Peaks.heic",
+            pixelWidth: 800,
+            pixelHeight: 500,
+            appearance: .light,
+            kind: .lightDark,
+            imageIndex: 0
+        )
+        let dark = WallpaperCacheIdentity.key(
+            token: "/Library/Desktop Pictures/Peaks.heic",
+            pixelWidth: 800,
+            pixelHeight: 500,
+            appearance: .dark,
+            kind: .lightDark,
+            imageIndex: 1
+        )
+        XCTAssertNotEqual(light, dark)
+        XCTAssertTrue(light.contains("light"))
+        XCTAssertTrue(dark.contains("dark"))
+        XCTAssertFalse(
+            WallpaperPictureStore.shouldKeep(hasPicture: false, completedCacheKey: light, currentCacheKey: light)
+        )
+        XCTAssertTrue(
+            WallpaperPictureStore.shouldKeep(hasPicture: true, completedCacheKey: dark, currentCacheKey: dark)
+        )
+        XCTAssertFalse(
+            WallpaperPictureStore.shouldKeep(hasPicture: true, completedCacheKey: light, currentCacheKey: dark)
+        )
+    }
+
+    private func base64Plist(_ object: [String: Any]) -> String {
+        binaryPlist(object).base64EncodedString()
+    }
+
+    private func binaryPlist(_ object: [String: Any]) -> Data {
+        try! PropertyListSerialization.data(fromPropertyList: object, format: .binary, options: 0)
+    }
+
+    private func choiceEntry(provider: String, configuration: [String: Any]) -> [String: Any] {
+        [
+            "Desktop": [
+                "Content": [
+                    "Choices": [[
+                        "Provider": provider,
+                        "Configuration": binaryPlist(configuration)
+                    ] as [String: Any]] as [Any]
+                ]
+            ]
+        ]
+    }
+
+    private func wallpaperStore(display: String, entry: [String: Any]) -> [String: Any] {
+        ["Displays": [display: entry]]
+    }
+}

@@ -24,7 +24,14 @@ final class OverlayController: NSObject {
     private var wantsGrid = false
     /// Wallpaper identity the visible grid is waiting on. A finished render for another key is dropped.
     private var pictureKey: String?
+    /// Wallpaper identity prepared for the next open, including while the grid is closed.
+    private var preparedKey: String?
     private var inflightPictureKey: String?
+    /// Last blur identity written to the log, so one open does not repeat it.
+    private var loggedPictureKey: String?
+    /// System appearance last used for the blur. The grid window's own appearance is not this.
+    private var lastSystemAppearance: WallpaperAppearance?
+    private var appearanceObservation: NSKeyValueObservation?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "overlay")
 
     func attach(model: GridBackModel) {
@@ -47,6 +54,8 @@ final class OverlayController: NSObject {
                 self?.otherApplicationDidActivate(notification)
             }
         }
+        watchSystemAppearance()
+        prewarmPicture()
     }
 
     func show() {
@@ -60,6 +69,7 @@ final class OverlayController: NSObject {
         }
         wantsGrid = true
         showGeneration += 1
+        loggedPictureKey = nil
         let generation = showGeneration
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
@@ -245,32 +255,72 @@ final class OverlayController: NSObject {
         appliedOcclusion = occlusion
     }
 
+    /// The grid window is fixed to dark Aqua, so its appearance is not the system's.
+    /// Light and Dark wallpapers follow NSApp. A change pre-warms the other frame.
+    private func watchSystemAppearance() {
+        guard appearanceObservation == nil else { return }
+        lastSystemAppearance = DesktopPicture.systemAppearance()
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.systemAppearanceDidChange()
+            }
+        }
+    }
+
+    private func systemAppearanceDidChange() {
+        let appearance = DesktopPicture.systemAppearance()
+        guard appearance != lastSystemAppearance else { return }
+        lastSystemAppearance = appearance
+        if wantsGrid, let screen = PrimaryDisplay.screen() {
+            ensurePicture(generation: showGeneration, on: screen)
+        } else {
+            prewarmPicture()
+        }
+    }
+
+    /// Prepares the blur before the grid opens. Opening the grid already re-reads
+    /// the wallpaper, so this runs at launch and when Light or Dark changes.
+    private func prewarmPicture() {
+        guard !wantsGrid, let screen = PrimaryDisplay.screen() else { return }
+        let job = DesktopPicture.job(on: screen)
+        notePicture(job)
+        preparedKey = job.cacheKey
+        guard !job.prefersPlainBlur, DesktopPicture.cached(job.cacheKey) == nil else { return }
+        startPictureRender(job, generation: showGeneration)
+    }
+
     /// Shows the shared blurred picture. A cached picture is applied immediately.
     /// A miss is rendered off the main thread, and the windows stay hidden until it arrives
     /// so the sharp wallpaper never flashes.
     private func ensurePicture(generation: Int, on screen: NSScreen) {
-        guard let job = DesktopPicture.job(on: screen) else {
-            log.error("DesktopPicture skipped: no desktop image URL")
-            pictureKey = nil
-            presentWallpaper(
-                hasPicture: false,
-                image: nil,
-                job: nil,
-                generation: generation,
-                cacheKey: ""
-            )
+        let job = DesktopPicture.job(on: screen)
+        notePicture(job)
+        pictureKey = job.cacheKey
+        preparedKey = job.cacheKey
+        if job.prefersPlainBlur {
+            showFallbackBlur()
+            revealGrid()
             return
         }
-        pictureKey = job.cacheKey
         if let image = DesktopPicture.cached(job.cacheKey) {
             applyPicture(image, job: job)
             revealGrid()
             return
         }
-        guard inflightPictureKey != job.cacheKey else { return }
-        inflightPictureKey = job.cacheKey
+        startPictureRender(job, generation: generation)
+    }
+
+    private func notePicture(_ job: DesktopPictureJob) {
+        guard loggedPictureKey != job.cacheKey else { return }
+        loggedPictureKey = job.cacheKey
+        log.info("DesktopPicture kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public)")
+    }
+
+    private func startPictureRender(_ job: DesktopPictureJob, generation: Int) {
         let key = job.cacheKey
-        log.info("DesktopPicture schedule main=\(Thread.isMainThread, privacy: .public) key=\(key, privacy: .public)")
+        guard inflightPictureKey != key else { return }
+        inflightPictureKey = key
+        log.info("DesktopPicture schedule main=\(Thread.isMainThread, privacy: .public)")
         OffMainWork.start {
             let onMain = Thread.isMainThread
             let qos = Int(qos_class_self().rawValue)
@@ -280,17 +330,25 @@ final class OverlayController: NSObject {
             return (onMain, qos, milliseconds, image)
         } apply: { [weak self] result in
             guard let self else { return }
-            if self.inflightPictureKey == key, self.showGeneration == generation {
+            if self.inflightPictureKey == key {
                 self.inflightPictureKey = nil
             }
             let (renderedOnMain, qos, milliseconds, cgImage) = result
             self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
+            if let image, WallpaperPictureStore.shouldKeep(
+                hasPicture: true,
+                completedCacheKey: key,
+                currentCacheKey: self.preparedKey ?? ""
+            ) {
+                DesktopPicture.store(image, key: key)
+            }
+            let applyGeneration = self.pictureKey == key ? self.showGeneration : generation
             self.presentWallpaper(
                 hasPicture: image != nil,
                 image: image,
                 job: job,
-                generation: generation,
+                generation: applyGeneration,
                 cacheKey: key
             )
         }
@@ -314,7 +372,7 @@ final class OverlayController: NSObject {
             stillWanted: wantsGrid
         ) {
         case .ignore:
-            log.info("DesktopPicture drop stale generation=\(generation, privacy: .public) key=\(cacheKey, privacy: .public)")
+            log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
         case .plainBlur:
             log.error("DesktopPicture unavailable; opening with the plain blur")
             showFallbackBlur()
@@ -454,7 +512,12 @@ enum SystemLauncherProbe {
 
 struct DesktopPictureJob {
     var cacheKey: String
-    var url: URL
+    var url: URL?
+    var imageIndex: Int
+    var kind: WallpaperKind
+    var appearance: WallpaperAppearance
+    var reportedSystemDefault: Bool
+    var solidColor: WallpaperSolidColor?
     var pointSize: NSSize
     var pixelWidth: Int
     var pixelHeight: Int
@@ -462,6 +525,8 @@ struct DesktopPictureJob {
     var screenY: Double
     var screenWidth: Double
     var screenHeight: Double
+
+    var prefersPlainBlur: Bool { url == nil && solidColor == nil }
 }
 
 enum DesktopPicture {
@@ -472,14 +537,90 @@ enum DesktopPicture {
         category: .pointsOfInterest
     )
 
-    static func job(on screen: NSScreen) -> DesktopPictureJob? {
-        guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+    static func systemAppearance() -> WallpaperAppearance {
+        appearance(matching: NSApp.effectiveAppearance)
+    }
+
+    static func appearance(matching appearance: NSAppearance) -> WallpaperAppearance {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    }
+
+    /// The blur for the wallpaper on this screen. A moving or time-of-day wallpaper
+    /// has no single frame, so the job asks for the plain blur instead.
+    static func job(on screen: NSScreen) -> DesktopPictureJob {
+        let appearance = systemAppearance()
+        let workspaceURL = NSWorkspace.shared.desktopImageURL(for: screen)?.standardizedFileURL
+        let configured = WallpaperStoreReader.choice(for: screen)
+        let selection = WallpaperSelectionResolver.select(
+            configured: configured,
+            workspacePath: workspaceURL?.path
+        )
+        let fill = solidColor(on: screen)
+        let solidFill = WallpaperSolidFill.applies(
+            selection: selection,
+            hasWorkspaceImage: workspaceURL != nil,
+            hasFillColor: fill != nil
+        )
+        var hints = WallpaperMetadataHints.none
+        var imageCount = 0
+        var fileIsDirectory = false
+        if case .file(let path) = selection {
+            var directory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue {
+                fileIsDirectory = true
+            } else {
+                let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
+                hints = read.hints
+                imageCount = read.imageCount
+            }
+        }
+        let plan = WallpaperBackdropPlanner.plan(
+            selection: selection,
+            hints: hints,
+            imageCount: imageCount,
+            appearance: appearance,
+            fileIsDirectory: fileIsDirectory,
+            solidFillAvailable: solidFill
+        )
         let scale = max(screen.backingScaleFactor, 1)
         let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
         let pixelH = max(1, Int((screen.frame.height * scale).rounded()))
+        let url: URL?
+        let imageIndex: Int
+        let color: WallpaperSolidColor?
+        let token: String
+        switch plan {
+        case .picture(let path, let index, _):
+            url = URL(fileURLWithPath: path)
+            imageIndex = index
+            color = nil
+            token = path
+        case .solidColor:
+            url = nil
+            imageIndex = 0
+            color = fill
+            token = colorToken(fill)
+        case .plainBlur:
+            url = nil
+            imageIndex = 0
+            color = nil
+            token = "plain"
+        }
         return DesktopPictureJob(
-            cacheKey: "\(url.path)|\(pixelW)x\(pixelH)",
+            cacheKey: WallpaperCacheIdentity.key(
+                token: token,
+                pixelWidth: pixelW,
+                pixelHeight: pixelH,
+                appearance: appearance,
+                kind: plan.kind,
+                imageIndex: url == nil ? nil : imageIndex
+            ),
             url: url,
+            imageIndex: imageIndex,
+            kind: plan.kind,
+            appearance: appearance,
+            reportedSystemDefault: workspaceURL.map { WallpaperReportedImage.isSystemDefault($0.path) } ?? false,
+            solidColor: color,
             pointSize: screen.frame.size,
             pixelWidth: pixelW,
             pixelHeight: pixelH,
@@ -488,6 +629,25 @@ enum DesktopPicture {
             screenWidth: Double(screen.frame.size.width),
             screenHeight: Double(screen.frame.size.height)
         )
+    }
+
+    private static func colorToken(_ color: WallpaperSolidColor?) -> String {
+        guard let color else { return "color" }
+        return String(
+            format: "color:%.4f,%.4f,%.4f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            color.red,
+            color.green,
+            color.blue
+        )
+    }
+
+    private static func solidColor(on screen: NSScreen) -> WallpaperSolidColor? {
+        guard let options = NSWorkspace.shared.desktopImageOptions(for: screen),
+              let color = options[.fillColor] as? NSColor,
+              let rgb = color.usingColorSpace(.sRGB) else { return nil }
+        func unit(_ value: CGFloat) -> Double { Double(min(max(value, 0), 1)) }
+        return WallpaperSolidColor(red: unit(rgb.redComponent), green: unit(rgb.greenComponent), blue: unit(rgb.blueComponent))
     }
 
     static func cached(_ key: String) -> NSImage? {
@@ -501,7 +661,8 @@ enum DesktopPicture {
 
     /// Decodes a small thumbnail before anything draws it. ImageIO otherwise waits
     /// until the draw to decode the full image.
-    private static func decodedThumbnail(at url: URL, maxPixelSize: Int) -> CGImage? {
+    private static func decodedThumbnail(at url: URL, index: Int, maxPixelSize: Int) -> CGImage? {
+        guard index >= 0 else { return nil }
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
         let thumbnailOptions: [CFString: Any] = [
@@ -510,7 +671,7 @@ enum DesktopPicture {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+        return CGImageSourceCreateThumbnailAtIndex(source, index, thumbnailOptions as CFDictionary)
     }
 
     /// Blurs the desktop picture on the calling thread.
@@ -524,18 +685,9 @@ enum DesktopPicture {
             pixelHeight: job.pixelHeight,
             pointHeight: Double(job.pointSize.height)
         )
-        guard let wallpaper = decodedThumbnail(at: job.url, maxPixelSize: plan.maxPixelSize) else { return nil }
         let width = plan.width
         let height = plan.height
         guard width > 0, height > 0 else { return nil }
-        let srcW = CGFloat(wallpaper.width)
-        let srcH = CGFloat(wallpaper.height)
-        guard srcW > 0, srcH > 0 else { return nil }
-        let pixelW = CGFloat(width)
-        let pixelH = CGFloat(height)
-        let fit = max(pixelW / srcW, pixelH / srcH)
-        let drawnW = srcW * fit
-        let drawnH = srcH * fit
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         guard let context = CGContext(
@@ -548,10 +700,33 @@ enum DesktopPicture {
             bitmapInfo: bitmapInfo
         ), let pixels = context.data else { return nil }
         context.interpolationQuality = .medium
-        context.draw(
-            wallpaper,
-            in: CGRect(x: (pixelW - drawnW) / 2, y: (pixelH - drawnH) / 2, width: drawnW, height: drawnH)
-        )
+        if let color = job.solidColor {
+            context.setFillColor(CGColor(
+                srgbRed: CGFloat(color.red),
+                green: CGFloat(color.green),
+                blue: CGFloat(color.blue),
+                alpha: 1
+            ))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        } else if let url = job.url {
+            guard let wallpaper = decodedThumbnail(at: url, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) else {
+                return nil
+            }
+            let srcW = CGFloat(wallpaper.width)
+            let srcH = CGFloat(wallpaper.height)
+            guard srcW > 0, srcH > 0 else { return nil }
+            let pixelW = CGFloat(width)
+            let pixelH = CGFloat(height)
+            let fit = max(pixelW / srcW, pixelH / srcH)
+            let drawnW = srcW * fit
+            let drawnH = srcH * fit
+            context.draw(
+                wallpaper,
+                in: CGRect(x: (pixelW - drawnW) / 2, y: (pixelH - drawnH) / 2, width: drawnW, height: drawnH)
+            )
+        } else {
+            return nil
+        }
         var sourceBuffer = vImage_Buffer(
             data: pixels,
             height: vImagePixelCount(height),
@@ -593,6 +768,58 @@ enum DesktopPicture {
             }
         }
         return context.makeImage()
+    }
+}
+
+/// The wallpaper the system recorded for this display. Missing or unreadable means
+/// the workspace image URL is the only picture available.
+enum WallpaperStoreReader {
+    static func choice(for screen: NSScreen) -> WallpaperConfiguredChoice? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+        guard let data = try? Data(contentsOf: url),
+              let store = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            return nil
+        }
+        return WallpaperStoreIndex.choice(in: store, displayUUID: displayUUID(of: screen))
+    }
+
+    private static func displayUUID(of screen: NSScreen) -> String? {
+        guard let displayID = PrimaryDisplay.displayID(of: screen),
+              let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return nil
+        }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+}
+
+/// `apr`, `h24`, and `solar` on a HEIC file. The tag is only a hint: the value is
+/// a property list in base 64, and a tag with no usable value still counts as present.
+enum WallpaperFileMetadata {
+    static func read(at url: URL) -> (hints: WallpaperMetadataHints, imageCount: Int) {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return (.none, 0)
+        }
+        let count = CGImageSourceGetCount(source)
+        guard count > 0 else { return (.none, 0) }
+        var apr: String?
+        var day: String?
+        var solar: String?
+        let primary = CGImageSourceGetPrimaryImageIndex(source)
+        for index in [0, primary] where index >= 0 && index < count {
+            guard let metadata = CGImageSourceCopyMetadataAtIndex(source, index, nil) else { continue }
+            apr = apr ?? tag("apple_desktop:apr", in: metadata)
+            day = day ?? tag("apple_desktop:h24", in: metadata)
+            solar = solar ?? tag("apple_desktop:solar", in: metadata)
+        }
+        return (WallpaperMetadataDecoder.hints(aprBase64: apr, h24Base64: day, solarBase64: solar), count)
+    }
+
+    private static func tag(_ name: String, in metadata: CGImageMetadata) -> String? {
+        guard let tag = CGImageMetadataCopyTagWithPath(metadata, nil, name as CFString) else { return nil }
+        if let text = CGImageMetadataTagCopyValue(tag) as? String { return text }
+        return ""
     }
 }
 
