@@ -274,15 +274,17 @@ final class OverlayController: NSObject {
         OffMainWork.start {
             let onMain = Thread.isMainThread
             let qos = Int(qos_class_self().rawValue)
+            let started = DispatchTime.now().uptimeNanoseconds
             let image = DesktopPicture.render(job)
-            return (onMain, qos, image)
+            let milliseconds = Int((DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000)
+            return (onMain, qos, milliseconds, image)
         } apply: { [weak self] result in
             guard let self else { return }
             if self.inflightPictureKey == key, self.showGeneration == generation {
                 self.inflightPictureKey = nil
             }
-            let (renderedOnMain, qos, cgImage) = result
-            self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
+            let (renderedOnMain, qos, milliseconds, cgImage) = result
+            self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
             self.presentWallpaper(
                 hasPicture: image != nil,
@@ -465,6 +467,10 @@ struct DesktopPictureJob {
 enum DesktopPicture {
     private static var cacheKey: String?
     private static var cache: NSImage?
+    private static let signposter = OSSignposter(
+        subsystem: "com.jimmythefallony.GridBack",
+        category: .pointsOfInterest
+    )
 
     static func job(on screen: NSScreen) -> DesktopPictureJob? {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
@@ -493,14 +499,34 @@ enum DesktopPicture {
         cache = image
     }
 
-    /// Blurs the desktop picture on the calling thread. Core Image is not used:
-    /// its Gaussian filter waits on a Default-QoS worker and trips the hang checker.
-    static func render(_ job: DesktopPictureJob) -> CGImage? {
+    /// Decodes a small thumbnail before anything draws it. ImageIO otherwise waits
+    /// until the draw to decode the full image.
+    private static func decodedThumbnail(at url: URL, maxPixelSize: Int) -> CGImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(job.url as CFURL, sourceOptions),
-              let wallpaper = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        let width = job.pixelWidth
-        let height = job.pixelHeight
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+    }
+
+    /// Blurs the desktop picture on the calling thread.
+    /// The picture is decoded up front at a quarter of the screen, so drawing it does not
+    /// decode a full-size image. The blur radius uses that same scale. Core Image is not used.
+    static func render(_ job: DesktopPictureJob) -> CGImage? {
+        let interval = signposter.beginInterval("WallpaperRender")
+        defer { signposter.endInterval("WallpaperRender", interval) }
+        let plan = WallpaperRenderSize.make(
+            pixelWidth: job.pixelWidth,
+            pixelHeight: job.pixelHeight,
+            pointHeight: Double(job.pointSize.height)
+        )
+        guard let wallpaper = decodedThumbnail(at: job.url, maxPixelSize: plan.maxPixelSize) else { return nil }
+        let width = plan.width
+        let height = plan.height
         guard width > 0, height > 0 else { return nil }
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
@@ -542,7 +568,7 @@ enum DesktopPicture {
         )
         guard allocated == kvImageNoError, scratch.data != nil else { return nil }
         defer { free(scratch.data) }
-        let sigma = 52 * Double(height) / Double(max(job.pointSize.height, 1))
+        let sigma = plan.sigma
         var resultInScratch = false
         let kernelLimit = min(width, height)
         for kernel in GaussianBoxKernel.sizes(sigma: sigma, passes: 3) {
