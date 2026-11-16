@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// How the desktop picture behind the grid should be chosen.
@@ -140,6 +141,10 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
     public var solidColor: WallpaperSolidColor?
     /// A system Solid Colors image, only when the reference stays in that directory.
     public var solidColorImagePath: String?
+    /// The colour provider's `systemColor` when it is a short name, not a path.
+    public var systemColorName: String?
+    /// Public description of `systemColor` and `type` for the colour provider. Capped.
+    public var colorValueLog: String
 
     public init(
         provider: String,
@@ -147,7 +152,9 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
         imageFilePath: String?,
         isFolder: Bool,
         solidColor: WallpaperSolidColor?,
-        solidColorImagePath: String?
+        solidColorImagePath: String?,
+        systemColorName: String? = nil,
+        colorValueLog: String = ""
     ) {
         self.provider = provider
         self.configKeys = configKeys
@@ -155,6 +162,8 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
         self.isFolder = isFolder
         self.solidColor = solidColor
         self.solidColorImagePath = solidColorImagePath
+        self.systemColorName = systemColorName
+        self.colorValueLog = colorValueLog
     }
 }
 
@@ -173,6 +182,8 @@ public struct WallpaperSolidColor: Equatable, Sendable {
 public enum WallpaperStoreIndex {
     public static let imageProvider = "com.apple.wallpaper.choice.image"
     public static let imageFolderProvider = "com.apple.wallpaper.choice.image-folder"
+    public static let colorProvider = "com.apple.wallpaper.choice.color"
+    public static let aerialsProvider = "com.apple.wallpaper.choice.aerials"
     public static let solidColorsDirectory = "/System/Library/Desktop Pictures/Solid Colors"
 
     /// The desktop choice for this display, then the choice for every display,
@@ -209,14 +220,21 @@ public enum WallpaperStoreIndex {
         let keys = configuration.keys.filter(isSafeKeyName).sorted()
         let folder = provider == imageFolderProvider
         let imagePath = provider == imageProvider ? singleImagePath(files: first["Files"], configuration: configuration) : nil
-        let found = findColor(in: configuration, depth: 0)
+        let found = provider == colorProvider ? findColor(in: configuration, depth: 0) : (color: nil, imagePath: nil)
+        let systemColor = configuration["systemColor"]
+        let colorLog = provider == colorProvider
+            ? WallpaperValueLog.colorProviderLine(systemColor: systemColor, type: configuration["type"])
+            : ""
+        let colorName = provider == colorProvider ? WallpaperValueLog.shortName(systemColor) : nil
         return WallpaperStoreChoice(
             provider: provider,
             configKeys: keys,
             imageFilePath: imagePath,
             isFolder: folder,
             solidColor: found.color,
-            solidColorImagePath: found.imagePath
+            solidColorImagePath: found.imagePath,
+            systemColorName: colorName,
+            colorValueLog: colorLog
         )
     }
 
@@ -412,35 +430,134 @@ public enum WallpaperReportedImage {
     }
 }
 
+public enum WallpaperNeutralFill {
+    /// A calm grey, one for Light and one for Dark. It is already flat, so
+    /// Reduce Transparency does not need a second material.
+    public static func color(for appearance: WallpaperAppearance) -> WallpaperSolidColor {
+        switch appearance {
+        case .dark:
+            return WallpaperSolidColor(red: 0.17, green: 0.17, blue: 0.18)
+        case .light:
+            return WallpaperSolidColor(red: 0.93, green: 0.93, blue: 0.94)
+        }
+    }
+}
+
+public enum WallpaperSolidColorMatch {
+    /// `Red Orange` matches `RedOrange.png` and `red orange.png`.
+    public static func fileName(matching displayName: String, candidates: [String]) -> String? {
+        let wanted = normalize(displayName)
+        guard !wanted.isEmpty else { return nil }
+        return candidates.first { normalize(stripExtension($0)) == wanted }
+    }
+
+    public static func normalize(_ name: String) -> String {
+        name.lowercased().filter { !$0.isWhitespace }
+    }
+
+    private static func stripExtension(_ name: String) -> String {
+        let lowered = name.lowercased()
+        if lowered.hasSuffix(".png") { return String(name.dropLast(4)) }
+        return name
+    }
+}
+
+public enum WallpaperValueLog {
+    public static let cap = 80
+
+    /// `systemColor` and `type` only. Nested dictionaries keep key names and scalars.
+    public static func colorProviderLine(systemColor: Any?, type: Any?) -> String {
+        clip("systemColor=\(describe(systemColor)) type=\(describe(type))", cap * 3)
+    }
+
+    /// A short display name, or nil when the value is a path or too long to be a name.
+    public static func shortName(_ value: Any?) -> String? {
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= cap, !trimmed.contains("/"), !trimmed.contains("~"), !trimmed.contains("..") else {
+            return nil
+        }
+        return trimmed
+    }
+
+    public static func describe(_ value: Any?) -> String {
+        if value == nil { return "none" }
+        if let text = value as? String {
+            return "String(\(clip(redacted(text), cap)))"
+        }
+        if let data = value as? Data {
+            return "Data(\(data.count)bytes)"
+        }
+        if let dictionary = value as? [String: Any] {
+            return "Dict(\(dictBody(dictionary, depth: 0)))"
+        }
+        if let list = value as? [Any] {
+            return "Array(\(list.count))"
+        }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return "Bool(\(number.boolValue))"
+            }
+            let double = number.doubleValue
+            if double.rounded() == double, double < 1_000_000_000, double > -1_000_000_000 {
+                return "Int(\(number.intValue))"
+            }
+            return "Double(\(String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), double)))"
+        }
+        return "Other"
+    }
+
+    private static func dictBody(_ dictionary: [String: Any], depth: Int) -> String {
+        dictionary.keys.sorted().prefix(8).map { key in
+            let name = clip(key, 24)
+            let nested = dictionary[key]
+            if depth == 0, let child = nested as? [String: Any] {
+                return "\(name)=Dict(\(dictBody(child, depth: 1)))"
+            }
+            if nested is [String: Any] { return "\(name)=Dict" }
+            if nested is [Any] { return "\(name)=Array" }
+            return "\(name)=\(describe(nested))"
+        }.joined(separator: ",")
+    }
+
+    private static func redacted(_ text: String) -> String {
+        guard text.contains("/") || text.contains("~") else { return text }
+        let name = (text as NSString).lastPathComponent
+        return name.isEmpty ? "redacted" : name
+    }
+
+    private static func clip(_ text: String, _ limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit))
+    }
+}
+
 public enum WallpaperChoicePolicy {
-    /// The image provider's file is used when it can be read. A colour in the
-    /// configuration is a flat fill. Every other stored choice uses a plain
-    /// photo URL only when that URL is not the system placeholder.
+    /// Only the image provider's file is opened. A colour provider uses a mapped
+    /// colour. Every other stored provider, including Aerials, is
+    /// `aerialOrUnknown` and does not use the legacy picture URL.
+    /// The placeholder `DefaultDesktop` file is never treated as the user's choice.
     public static func resolve(
         choice: WallpaperStoreChoice?,
         workspacePath: String?,
         imageFileReadable: Bool
-    ) -> (source: WallpaperSource, use: WallpaperUse) {
-        let legacy = legacyFile(workspacePath)
+    ) -> (source: WallpaperSource, use: WallpaperUse, kind: WallpaperKind) {
         if let choice {
             if choice.provider == WallpaperStoreIndex.imageProvider,
                !choice.isFolder,
                let path = choice.imageFilePath,
                imageFileReadable {
-                return (.store, .imageFile(path))
+                return (.store, .imageFile(path), .still)
             }
-            if let color = choice.solidColor {
-                return (.store, .solid(color))
+            if choice.provider == WallpaperStoreIndex.colorProvider, let color = choice.solidColor {
+                return (.store, .solid(color), .solidColor)
             }
-            if let legacy {
-                return (.legacy, .imageFile(legacy))
-            }
-            return (.store, .plainBlur)
+            return (.store, .plainBlur, .aerialOrUnknown)
         }
-        if let legacy {
-            return (.legacy, .imageFile(legacy))
+        if let legacy = legacyFile(workspacePath) {
+            return (.legacy, .imageFile(legacy), .still)
         }
-        return (.none, .plainBlur)
+        return (.none, .plainBlur, .fallback)
     }
 
     private static func legacyFile(_ path: String?) -> String? {

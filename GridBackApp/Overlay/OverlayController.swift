@@ -285,7 +285,7 @@ final class OverlayController: NSObject {
         let job = DesktopPicture.job(on: screen)
         notePicture(job)
         preparedKey = job.cacheKey
-        guard !job.prefersPlainBlur, DesktopPicture.cached(job.cacheKey) == nil else { return }
+        guard DesktopPicture.cached(job.cacheKey) == nil else { return }
         startPictureRender(job, generation: showGeneration)
     }
 
@@ -297,11 +297,6 @@ final class OverlayController: NSObject {
         notePicture(job)
         pictureKey = job.cacheKey
         preparedKey = job.cacheKey
-        if job.prefersPlainBlur {
-            showFallbackBlur()
-            revealGrid()
-            return
-        }
         if let image = DesktopPicture.cached(job.cacheKey) {
             applyPicture(image, job: job)
             revealGrid()
@@ -313,11 +308,12 @@ final class OverlayController: NSObject {
     private func notePicture(_ job: DesktopPictureJob) {
         let provider = job.provider.isEmpty ? "none" : job.provider
         let keys = WallpaperLogName.configKeys(job.configKeys)
-        let line = "source=\(job.source.rawValue) provider=\(provider) configKeys=\(keys) kind=\(job.kind.rawValue) appearance=\(job.appearance.rawValue) reportedDefault=\(job.reportedSystemDefault)"
+        let colors = job.colorValueLog.isEmpty ? "none" : job.colorValueLog
+        let line = "source=\(job.source.rawValue) provider=\(provider) configKeys=\(keys) kind=\(job.kind.rawValue) appearance=\(job.appearance.rawValue) reportedDefault=\(job.reportedSystemDefault) colorValues=\(colors)"
         guard showGeneration != loggedGeneration || line != loggedDecision else { return }
         loggedGeneration = showGeneration
         loggedDecision = line
-        log.info("DesktopPicture source=\(job.source.rawValue, privacy: .public) provider=\(provider, privacy: .public) configKeys=\(keys, privacy: .public) kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public)")
+        log.info("DesktopPicture source=\(job.source.rawValue, privacy: .public) provider=\(provider, privacy: .public) configKeys=\(keys, privacy: .public) kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public) colorValues=\(colors, privacy: .public)")
     }
 
     private func startPictureRender(_ job: DesktopPictureJob, generation: Int) {
@@ -378,8 +374,8 @@ final class OverlayController: NSObject {
         case .ignore:
             log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
         case .plainBlur:
-            log.error("DesktopPicture unavailable; opening with the plain blur")
-            showFallbackBlur()
+            log.error("DesktopPicture unavailable; opening with the neutral fill")
+            showSharedFill(WallpaperNeutralFill.color(for: job?.appearance ?? .dark), job: job)
             revealGrid()
         case .picture:
             guard let image, let job else { return }
@@ -389,22 +385,36 @@ final class OverlayController: NSObject {
         }
     }
 
-    private func showFallbackBlur() {
+    /// One still image for both windows. A live behind-window blur would be sampled
+    /// twice, so the grid and the Dock band would not match. Reduce Transparency
+    /// stays sensible because this image is already flat or already blurred.
+    private func showSharedFill(_ color: WallpaperSolidColor, job: DesktopPictureJob?) {
         guard let panel, let backdrop = dockBackdrop else { return }
-        BackdropSurface.show(
-            image: nil,
-            placement: panel.contentView?.bounds ?? .zero,
-            imageView: panel.backdropView,
-            fallback: panel.fallbackBlur,
-            window: panel
+        let width = job?.pixelWidth ?? 32
+        let height = job?.pixelHeight ?? 32
+        let pointSize = job?.pointSize ?? panel.frame.size
+        guard let image = DesktopPicture.flatImage(color: color, pixelWidth: width, pixelHeight: height, pointSize: pointSize) else { return }
+        let screen = job ?? DesktopPictureJob(
+            cacheKey: "",
+            url: nil,
+            imageIndex: 0,
+            kind: .fallback,
+            appearance: .dark,
+            reportedSystemDefault: false,
+            source: .none,
+            provider: "",
+            configKeys: [],
+            colorValueLog: "",
+            solidColor: color,
+            pointSize: pointSize,
+            pixelWidth: width,
+            pixelHeight: height,
+            screenX: Double(panel.frame.minX),
+            screenY: Double(panel.frame.minY),
+            screenWidth: Double(panel.frame.width),
+            screenHeight: Double(panel.frame.height)
         )
-        BackdropSurface.show(
-            image: nil,
-            placement: backdrop.contentView?.bounds ?? .zero,
-            imageView: backdrop.backdropView,
-            fallback: backdrop.fallbackBlur,
-            window: backdrop
-        )
+        applyPicture(image, job: screen)
     }
 
     private func applyPicture(_ image: NSImage, job: DesktopPictureJob) {
@@ -418,14 +428,12 @@ final class OverlayController: NSObject {
             image: image,
             placement: NSRect(x: gridPlacement.x, y: gridPlacement.y, width: gridPlacement.width, height: gridPlacement.height),
             imageView: panel.backdropView,
-            fallback: panel.fallbackBlur,
             window: panel
         )
         BackdropSurface.show(
             image: image,
             placement: NSRect(x: fullPlacement.x, y: fullPlacement.y, width: fullPlacement.width, height: fullPlacement.height),
             imageView: backdrop.backdropView,
-            fallback: backdrop.fallbackBlur,
             window: backdrop
         )
     }
@@ -524,6 +532,7 @@ struct DesktopPictureJob {
     var source: WallpaperSource
     var provider: String
     var configKeys: [String]
+    var colorValueLog: String
     var solidColor: WallpaperSolidColor?
     var pointSize: NSSize
     var pixelWidth: Int
@@ -564,6 +573,12 @@ enum DesktopPicture {
         if choice?.solidColor == nil, let colorPath = choice?.solidColorImagePath {
             choice?.solidColor = WallpaperFileMetadata.averageColor(at: URL(fileURLWithPath: colorPath))
         }
+        if choice?.provider == WallpaperStoreIndex.colorProvider,
+           choice?.solidColor == nil,
+           let name = choice?.systemColorName,
+           let file = WallpaperSolidColors.existingFile(matching: name) {
+            choice?.solidColor = WallpaperFileMetadata.averageColor(at: URL(fileURLWithPath: file))
+        }
         let readable = choice?.imageFilePath.map { path in
             var directory: ObjCBool = false
             return FileManager.default.isReadableFile(atPath: path)
@@ -592,14 +607,17 @@ enum DesktopPicture {
                 imageIndex = index
                 token = path
             case .plainBlur:
-                token = "plain"
+                color = WallpaperNeutralFill.color(for: appearance)
+                token = "neutral"
             }
         case .solid(let fill):
             kind = .solidColor
             color = fill
             token = colorToken(fill)
         case .plainBlur:
-            kind = .fallback
+            kind = decision.kind
+            color = WallpaperNeutralFill.color(for: appearance)
+            token = "neutral"
         }
         return DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
@@ -619,6 +637,7 @@ enum DesktopPicture {
             source: decision.source,
             provider: choice?.provider ?? "",
             configKeys: choice?.configKeys ?? [],
+            colorValueLog: choice?.colorValueLog ?? "",
             solidColor: color,
             pointSize: screen.frame.size,
             pixelWidth: pixelW,
@@ -639,6 +658,30 @@ enum DesktopPicture {
             color.green,
             color.blue
         )
+    }
+
+    static func flatImage(color: WallpaperSolidColor, pixelWidth: Int, pixelHeight: Int, pointSize: NSSize) -> NSImage? {
+        guard let cgImage = render(DesktopPictureJob(
+            cacheKey: "",
+            url: nil,
+            imageIndex: 0,
+            kind: .solidColor,
+            appearance: .dark,
+            reportedSystemDefault: false,
+            source: .none,
+            provider: "",
+            configKeys: [],
+            colorValueLog: "",
+            solidColor: color,
+            pointSize: pointSize,
+            pixelWidth: max(pixelWidth, 1),
+            pixelHeight: max(pixelHeight, 1),
+            screenX: 0,
+            screenY: 0,
+            screenWidth: Double(pointSize.width),
+            screenHeight: Double(pointSize.height)
+        )) else { return nil }
+        return NSImage(cgImage: cgImage, size: pointSize)
     }
 
     static func cached(_ key: String) -> NSImage? {
@@ -767,6 +810,17 @@ enum DesktopPicture {
 /// the workspace image URL is the only picture available.
 /// A sandboxed App Store build cannot read this file. Photos still come from
 /// the legacy picture URL; every other wallpaper then uses the plain blur.
+enum WallpaperSolidColors {
+    static func existingFile(matching name: String) -> String? {
+        let directory = WallpaperStoreIndex.solidColorsDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory),
+              let file = WallpaperSolidColorMatch.fileName(matching: name, candidates: names) else {
+            return nil
+        }
+        return (directory as NSString).appendingPathComponent(file)
+    }
+}
+
 enum WallpaperStoreReader {
     struct Snapshot {
         var choice: WallpaperStoreChoice?

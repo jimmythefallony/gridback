@@ -12,7 +12,6 @@ final class OverlayPanel: NSPanel {
     }
 
     let backdropView = NSImageView()
-    let fallbackBlur = NSVisualEffectView()
 
     init(screen: NSScreen) {
         super.init(
@@ -47,7 +46,7 @@ final class OverlayPanel: NSPanel {
         identifier = NSUserInterfaceItemIdentifier("GridBackOverlay")
         appearance = NSAppearance(named: .darkAqua)
         ignoresMouseEvents = false
-        BackdropSurface.prepare(imageView: backdropView, fallback: fallbackBlur, in: self)
+        BackdropSurface.prepare(imageView: backdropView, in: self)
     }
 
     override var canBecomeKey: Bool { true }
@@ -63,7 +62,6 @@ final class DockBackdropPanel: NSPanel {
     }
 
     let backdropView = NSImageView()
-    let fallbackBlur = NSVisualEffectView()
 
     init(screen: NSScreen) {
         super.init(
@@ -95,7 +93,7 @@ final class DockBackdropPanel: NSPanel {
         identifier = NSUserInterfaceItemIdentifier("GridBackDockBackdrop")
         appearance = NSAppearance(named: .darkAqua)
         ignoresMouseEvents = true
-        BackdropSurface.prepare(imageView: backdropView, fallback: fallbackBlur, in: self)
+        BackdropSurface.prepare(imageView: backdropView, in: self)
     }
 
     override var canBecomeKey: Bool { false }
@@ -103,16 +101,12 @@ final class DockBackdropPanel: NSPanel {
 }
 
 enum BackdropSurface {
-    static func prepare(imageView: NSImageView, fallback: NSVisualEffectView, in window: NSWindow) {
+    static func prepare(imageView: NSImageView, in window: NSWindow) {
         imageView.imageScaling = .scaleAxesIndependently
         imageView.imageAlignment = .alignCenter
         imageView.imageFrameStyle = .none
         imageView.wantsLayer = true
         imageView.layer?.backgroundColor = NSColor.clear.cgColor
-        fallback.material = .fullScreenUI
-        fallback.blendingMode = .behindWindow
-        fallback.state = .active
-        fallback.isHidden = true
         let container = NSView(frame: window.contentView?.bounds ?? .zero)
         container.autoresizingMask = [.width, .height]
         container.clipsToBounds = true
@@ -120,25 +114,10 @@ enum BackdropSurface {
         window.contentView = container
     }
 
-    /// Places one full-screen picture in `window`'s coordinates. The material is
-    /// not in the hierarchy while that picture is showing, so it cannot tint it.
-    static func show(image: NSImage?, placement: NSRect, imageView: NSImageView, fallback: NSVisualEffectView, window: NSWindow) {
-        guard let image else {
-            imageView.image = nil
-            imageView.isHidden = true
-            let container = window.contentView
-            fallback.frame = container?.bounds ?? placement
-            fallback.autoresizingMask = [.width, .height]
-            if fallback.superview == nil {
-                container?.addSubview(fallback, positioned: .below, relativeTo: nil)
-            }
-            fallback.isHidden = false
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            return
-        }
-        fallback.isHidden = true
-        fallback.removeFromSuperview()
+    /// Places the one shared picture in `window`'s coordinates. Both windows
+    /// show this same image, so the grid and the Dock band stay aligned.
+    /// Reduce Transparency does not change it: there is no live desktop sample.
+    static func show(image: NSImage, placement: NSRect, imageView: NSImageView, window: NSWindow) {
         imageView.isHidden = false
         imageView.frame = placement
         imageView.image = image

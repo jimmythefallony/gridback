@@ -859,14 +859,10 @@ final class WallpaperClassificationTests: XCTestCase {
         XCTAssertEqual(choice?.isFolder, true)
         XCTAssertNil(choice?.imageFilePath)
         let photo = "/Library/Desktop Pictures/Current.jpg"
-        XCTAssertEqual(
-            WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false).source,
-            .legacy
-        )
-        XCTAssertEqual(
-            WallpaperChoicePolicy.resolve(choice: choice, workspacePath: WallpaperReportedImage.systemDefaultPath, imageFileReadable: false).use,
-            .plainBlur
-        )
+        let folder = WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false)
+        XCTAssertEqual(folder.source, .store)
+        XCTAssertEqual(folder.use, .plainBlur)
+        XCTAssertEqual(folder.kind, .aerialOrUnknown)
     }
 
     func testUnknownProviderKeepsTheNameAndDoesNotGuessAFile() {
@@ -892,10 +888,10 @@ final class WallpaperClassificationTests: XCTestCase {
         XCTAssertEqual(unknown.source, .store)
         XCTAssertEqual(unknown.use, .plainBlur)
         let photo = "/Library/Desktop Pictures/Photo.jpg"
-        XCTAssertEqual(
-            WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false).source,
-            .legacy
-        )
+        let ignored = WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false)
+        XCTAssertEqual(ignored.source, .store)
+        XCTAssertEqual(ignored.use, .plainBlur)
+        XCTAssertEqual(ignored.kind, .aerialOrUnknown)
     }
 
     func testMissingKeysReturnNilAndAMissingStoreUsesARealPhotoOnly() {
@@ -943,17 +939,19 @@ final class WallpaperClassificationTests: XCTestCase {
             "Desktop": [
                 "Content": [
                     "Choices": [[
-                        "Provider": "com.apple.wallpaper.choice.unknown",
+                        "Provider": WallpaperStoreIndex.colorProvider,
                         "Configuration": binaryPlist([
-                            "backgroundColor": ["components": [1.0, 0.4, 0.1, 1.0]],
-                            "placement": 1
+                            "systemColor": ["components": [1.0, 0.4, 0.1, 1.0]],
+                            "type": "system"
                         ])
                     ] as [String: Any]] as [Any]
                 ]
             ]
         ]
         let choice = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)
-        XCTAssertEqual(choice?.configKeys, ["backgroundColor", "placement"])
+        XCTAssertEqual(choice?.configKeys, ["systemColor", "type"])
+        XCTAssertTrue(choice?.colorValueLog.contains("systemColor=Dict(") == true)
+        XCTAssertTrue(choice?.colorValueLog.contains("type=String(system)") == true)
         XCTAssertEqual(choice?.solidColor?.red ?? -1, 1, accuracy: 0.001)
         XCTAssertEqual(choice?.solidColor?.green ?? -1, 0.4, accuracy: 0.001)
         XCTAssertEqual(choice?.solidColor?.blue ?? -1, 0.1, accuracy: 0.001)
@@ -972,12 +970,12 @@ final class WallpaperClassificationTests: XCTestCase {
         )
         XCTAssertNil(WallpaperStoreIndex.solidColorImagePath(from: "/System/Library/Desktop Pictures/Solid Colors/../Secrets.png"))
         XCTAssertNil(WallpaperStoreIndex.solidColorImagePath(from: "/Library/Desktop Pictures/Photo.png"))
-        let encoded = binaryPlist(["swatch": "Solid Colors/Red Orange.png"])
+        let encoded = binaryPlist(["systemColor": "Solid Colors/Red Orange.png", "type": "system"])
         let entry: [String: Any] = [
             "Desktop": [
                 "Content": [
                     "Choices": [[
-                        "Provider": "com.apple.wallpaper.choice.unknown",
+                        "Provider": WallpaperStoreIndex.colorProvider,
                         "Configuration": encoded
                     ] as [String: Any]] as [Any]
                 ]
@@ -985,7 +983,7 @@ final class WallpaperClassificationTests: XCTestCase {
         ]
         let choice = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)
         XCTAssertEqual(choice?.solidColorImagePath, safe)
-        XCTAssertEqual(WallpaperLogName.configKeys(choice?.configKeys ?? []), "swatch")
+        XCTAssertEqual(WallpaperLogName.configKeys(choice?.configKeys ?? []), "systemColor,type")
         XCTAssertEqual(WallpaperLogName.fileName(path: "/Users/someone/Pictures/Cat.jpg"), "Cat.jpg")
         XCTAssertFalse(WallpaperLogName.fileName(path: "/Users/someone/Pictures/Cat.jpg").contains("/"))
     }
@@ -1015,7 +1013,59 @@ final class WallpaperClassificationTests: XCTestCase {
         )
     }
 
-    func testAnUnreadableImageFileFallsBackToARealPhotoURL() {
+    func testAerialsStayUnknownWhateverTheLegacyURLSays() {
+        let entry: [String: Any] = [
+            "Desktop": [
+                "Content": [
+                    "Choices": [[
+                        "Provider": WallpaperStoreIndex.aerialsProvider,
+                        "Configuration": binaryPlist(["assetID": "night-city"])
+                    ] as [String: Any]] as [Any]
+                ]
+            ]
+        ]
+        let choice = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)
+        XCTAssertEqual(choice?.provider, WallpaperStoreIndex.aerialsProvider)
+        XCTAssertEqual(choice?.configKeys, ["assetID"])
+        XCTAssertNil(choice?.imageFilePath)
+        let legacy = "/System/Library/Desktop Pictures/Some Time.heic"
+        let decision = WallpaperChoicePolicy.resolve(choice: choice, workspacePath: legacy, imageFileReadable: true)
+        XCTAssertEqual(decision.source, .store)
+        XCTAssertEqual(decision.use, .plainBlur)
+        XCTAssertEqual(decision.kind, .aerialOrUnknown)
+        let placeholder = WallpaperChoicePolicy.resolve(
+            choice: choice,
+            workspacePath: WallpaperReportedImage.systemDefaultPath,
+            imageFileReadable: true
+        )
+        XCTAssertEqual(placeholder.kind, .aerialOrUnknown)
+        XCTAssertEqual(placeholder.use, .plainBlur)
+    }
+
+    func testSystemColorNameMatchesASolidColorsPNGWithoutAColourTable() {
+        XCTAssertEqual(
+            WallpaperSolidColorMatch.fileName(matching: "Red Orange", candidates: ["Blue.png", "RedOrange.png"]),
+            "RedOrange.png"
+        )
+        XCTAssertEqual(
+            WallpaperSolidColorMatch.fileName(matching: "red orange", candidates: ["Red Orange.png"]),
+            "Red Orange.png"
+        )
+        XCTAssertNil(WallpaperSolidColorMatch.fileName(matching: "Red Orange", candidates: ["Blue.png"]))
+        let named = WallpaperValueLog.colorProviderLine(systemColor: "Red Orange", type: 1)
+        XCTAssertTrue(named.contains("systemColor=String(Red Orange)"))
+        XCTAssertTrue(named.contains("type=Int(1)"))
+        XCTAssertFalse(named.contains("/Users"))
+        let pathLike = WallpaperValueLog.describe("/Users/someone/Library/secret.png")
+        XCTAssertFalse(pathLike.contains("someone"))
+        XCTAssertTrue(pathLike.hasPrefix("String("))
+        let dark = WallpaperNeutralFill.color(for: .dark)
+        let light = WallpaperNeutralFill.color(for: .light)
+        XCTAssertLessThan(dark.red, 0.4)
+        XCTAssertGreaterThan(light.red, 0.8)
+    }
+
+    func testAnUnreadableImageFileIsNotReplacedByAnotherURL() {
         let choice = WallpaperStoreChoice(
             provider: WallpaperStoreIndex.imageProvider,
             configKeys: ["url"],
@@ -1027,7 +1077,11 @@ final class WallpaperClassificationTests: XCTestCase {
         let photo = "/Library/Desktop Pictures/Photo.jpg"
         XCTAssertEqual(
             WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false).use,
-            .imageFile(photo)
+            .plainBlur
+        )
+        XCTAssertEqual(
+            WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: false).kind,
+            .aerialOrUnknown
         )
         XCTAssertEqual(
             WallpaperChoicePolicy.resolve(choice: choice, workspacePath: photo, imageFileReadable: true).use,
