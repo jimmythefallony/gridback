@@ -127,6 +127,14 @@
 			isa = PBXBuildFile;
 			fileRef = D3F6B8A90C192A3B4C5D6E06;
 		};
+		A9D4E1C07B2F48A1C3E5D702 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = A9D4E1C07B2F48A1C3E5D701;
+		};
+		A9D4E1C07B2F48A1C3E5D704 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = A9D4E1C07B2F48A1C3E5D703;
+		};
 		0A0000000000000000000019 /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			productRef = 0A0000000000000000000017;
@@ -334,6 +342,18 @@
 			path = LoginItemStateTests.swift;
 			sourceTree = "<group>";
 		};
+		A9D4E1C07B2F48A1C3E5D701 /* WallpaperDiagnosticRunner.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WallpaperDiagnosticRunner.swift;
+			sourceTree = "<group>";
+		};
+		A9D4E1C07B2F48A1C3E5D703 /* WallpaperDiagnosticsTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WallpaperDiagnosticsTests.swift;
+			sourceTree = "<group>";
+		};
 		0A0000000000000000000014 /* GridBack.app */ = {
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
@@ -422,6 +442,7 @@
 				BDE77485B3C0C457DD261A3C,
 				D0989F205DFF992378B95266,
 				878B86F984E9F4DE20821B96,
+				A9D4E1C07B2F48A1C3E5D701,
 			);
 			path = Overlay;
 			sourceTree = "<group>";
@@ -473,6 +494,7 @@
 				B36D39777581103D750303F1,
 				F8B2D5C03E7E49C1B2D4E6F8,
 				D3F6B8A90C192A3B4C5D6E06,
+				A9D4E1C07B2F48A1C3E5D703,
 			);
 			path = GridBackCoreTests;
 			sourceTree = "<group>";
@@ -626,6 +648,7 @@
 				38CEF8A97ECD396A85BB061D,
 				E8A1C3B507192A3B4C5D6E01,
 				A0C3E5D709192A3B4C5D6E03,
+				A9D4E1C07B2F48A1C3E5D702,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -641,6 +664,7 @@
 				58104959C104BEB803A7EB94,
 				E7A1C4B92F6D48B0A1C3D5E7,
 				C2E5A7B90B192A3B4C5D6E05,
+				A9D4E1C07B2F48A1C3E5D704,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

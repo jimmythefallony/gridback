@@ -29,6 +29,8 @@ final class OverlayController: NSObject {
     private var inflightPictureKey: String?
     /// Last decision written to the log, so one open records one line.
     private var loggedDecision = ""
+    /// One diagnostic record per open, and another when the stored wallpaper changes.
+    private var wallpaperDiagStamp = ""
     private var loggedGeneration = -1
     private var loggedSolidColorNames = false
     /// System appearance last used for the blur. The grid window's own appearance is not this.
@@ -141,6 +143,7 @@ final class OverlayController: NSObject {
 
     private func refreshDockBandIfNeeded() {
         guard wantsGrid, let screen = PrimaryDisplay.screen() else { return }
+        noteWallpaperChange(on: screen)
         let occlusion = DockClearanceReader.current(on: screen).occlusion
         guard occlusion != appliedOcclusion else { return }
         relayout(on: screen)
@@ -296,6 +299,9 @@ final class OverlayController: NSObject {
     private func ensurePicture(generation: Int, on screen: NSScreen) {
         let job = DesktopPicture.job(on: screen)
         notePicture(job)
+        if wantsGrid {
+            scheduleWallpaperDiagnostics(storeModified: job.storeModified, legacyFileName: job.legacyFileName)
+        }
         pictureKey = job.cacheKey
         preparedKey = job.cacheKey
         if let image = DesktopPicture.cached(job.cacheKey) {
@@ -329,6 +335,27 @@ final class OverlayController: NSObject {
         if !job.structureLog.isEmpty {
             log.info("DesktopPicture structure=\(job.structureLog, privacy: .public)")
         }
+    }
+
+    /// The full read happens on a background queue. Opening the grid does not wait for it.
+    private func scheduleWallpaperDiagnostics(storeModified: TimeInterval, legacyFileName: String) {
+        let stamp = "\(showGeneration)|\(Int(storeModified.rounded()))|\(legacyFileName)"
+        guard stamp != wallpaperDiagStamp else { return }
+        wallpaperDiagStamp = stamp
+        WallpaperDiagnosticRunner.schedule(
+            displayUUID: WallpaperStoreReader.currentDisplayUUID(),
+            legacyFileName: legacyFileName
+        )
+    }
+
+    /// A changed store file is worth another record while the grid is open.
+    /// The check is the file's modification time, not a second read of the store.
+    private func noteWallpaperChange(on screen: NSScreen) {
+        let modified = Int(WallpaperStoreReader.modificationDate().rounded())
+        let prefix = "\(showGeneration)|\(modified)|"
+        guard !wallpaperDiagStamp.hasPrefix(prefix) else { return }
+        let legacy = WallpaperLogName.fileName(path: NSWorkspace.shared.desktopImageURL(for: screen)?.path)
+        scheduleWallpaperDiagnostics(storeModified: TimeInterval(modified), legacyFileName: legacy)
     }
 
     private func startPictureRender(_ job: DesktopPictureJob, generation: Int) {
@@ -560,6 +587,9 @@ struct DesktopPictureJob {
     var screenY: Double
     var screenWidth: Double
     var screenHeight: Double
+    var storeModified: TimeInterval = 0
+    /// File name only. Folders are not kept.
+    var legacyFileName: String = ""
 
     var prefersPlainBlur: Bool { url == nil && solidColor == nil }
 }
@@ -757,7 +787,9 @@ enum DesktopPicture {
             screenX: Double(screen.frame.origin.x),
             screenY: Double(screen.frame.origin.y),
             screenWidth: Double(screen.frame.size.width),
-            screenHeight: Double(screen.frame.size.height)
+            screenHeight: Double(screen.frame.size.height),
+            storeModified: stored.modified,
+            legacyFileName: WallpaperLogName.fileName(path: workspacePath)
         )
     }
 
@@ -1125,22 +1157,37 @@ enum WallpaperStoreReader {
     }
 
     static func load() -> Snapshot {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
-        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate?.timeIntervalSince1970 ?? 0
-        guard let data = try? Data(contentsOf: url),
-              let store = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+        let modified = modificationDate()
+        guard let store = read() else {
             return Snapshot(choice: nil, modified: modified)
         }
-        return Snapshot(choice: WallpaperStoreIndex.choice(in: store, displayUUID: mainDisplayUUID()), modified: modified)
+        let choice = WallpaperStoreIndex.choice(in: store, displayUUID: currentDisplayUUID())
+        return Snapshot(choice: choice, modified: modified)
     }
 
-    private static func mainDisplayUUID() -> String? {
+    static func modificationDate() -> TimeInterval {
+        (try? storeURL().resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate?.timeIntervalSince1970 ?? 0
+    }
+
+    static func read() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: storeURL()),
+              let store = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
+            return nil
+        }
+        return store
+    }
+
+    static func currentDisplayUUID() -> String? {
         guard let uuid = CGDisplayCreateUUIDFromDisplayID(CGMainDisplayID())?.takeRetainedValue() else {
             return nil
         }
         return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    private static func storeURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
     }
 }
 
@@ -1166,6 +1213,25 @@ enum WallpaperFileMetadata {
             solar = solar ?? tag("apple_desktop:solar", in: metadata)
         }
         return (WallpaperMetadataDecoder.hints(aprBase64: apr, h24Base64: day, solarBase64: solar), count, size.width, size.height)
+    }
+
+    /// Whether the dynamic-wallpaper tags are present, and how many frames the file has.
+    /// The tag values are not returned.
+    static func presence(at url: URL) -> (h24: Bool, solar: Bool, apr: Bool, frames: Int)? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        var apr = false
+        var day = false
+        var solar = false
+        let primary = CGImageSourceGetPrimaryImageIndex(source)
+        for index in [0, primary] where index >= 0 && index < count {
+            guard let metadata = CGImageSourceCopyMetadataAtIndex(source, index, nil) else { continue }
+            apr = apr || tag("apple_desktop:apr", in: metadata) != nil
+            day = day || tag("apple_desktop:h24", in: metadata) != nil
+            solar = solar || tag("apple_desktop:solar", in: metadata) != nil
+        }
+        return (day, solar, apr, count)
     }
 
     /// One pixel from a very small picture. Large files are not decoded here.
