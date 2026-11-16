@@ -74,7 +74,7 @@ final class OverlayController: NSObject {
         let generation = showGeneration
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
-        let backdrop = self.dockBackdrop ?? DockBackdropPanel(screen: screen)
+        let backdrop = self.dockBackdrop ?? DockBackdropPanel(screen: screen, ink: model.ink)
         self.dockBackdrop = backdrop
         // The window already stops at the Dock and covers the menu bar, so the
         // icon layout uses the window itself and is not inset a second time.
@@ -226,7 +226,7 @@ final class OverlayController: NSObject {
 
     private func relayout(on screen: NSScreen) {
         guard let panel, let model else { return }
-        let backdrop = dockBackdrop ?? DockBackdropPanel(screen: screen)
+        let backdrop = dockBackdrop ?? DockBackdropPanel(screen: screen, ink: model.ink)
         dockBackdrop = backdrop
         let occlusion = DockClearanceReader.current(on: screen).occlusion
         layoutFrames(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
@@ -256,8 +256,9 @@ final class OverlayController: NSObject {
         appliedOcclusion = occlusion
     }
 
-    /// The grid window is fixed to dark Aqua, so its appearance is not the system's.
-    /// Light and Dark wallpapers follow NSApp. A change pre-warms the other frame.
+    /// The grid window follows the ink (dark Aqua while ink is light), so its
+    /// appearance is not the system's. Light and Dark wallpapers follow NSApp.
+    /// A change pre-warms the other frame.
     private func watchSystemAppearance() {
         guard appearanceObservation == nil else { return }
         lastSystemAppearance = DesktopPicture.systemAppearance()
@@ -475,7 +476,7 @@ final class OverlayController: NSObject {
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {
-        let panel = OverlayPanel(screen: screen)
+        let panel = OverlayPanel(screen: screen, ink: model.ink)
         let hosting = NSHostingView(rootView: OverlayRootView(model: model))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.wantsLayer = true

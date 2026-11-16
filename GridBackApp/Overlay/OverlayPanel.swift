@@ -13,7 +13,7 @@ final class OverlayPanel: NSPanel {
 
     let backdropView = NSImageView()
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, ink: Ink) {
         super.init(
             contentRect: screen.frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -44,7 +44,7 @@ final class OverlayPanel: NSPanel {
         titlebarAppearsTransparent = true
         title = "GridBack"
         identifier = NSUserInterfaceItemIdentifier("GridBackOverlay")
-        appearance = NSAppearance(named: .darkAqua)
+        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
         ignoresMouseEvents = false
         BackdropSurface.prepare(imageView: backdropView, in: self)
     }
@@ -63,7 +63,7 @@ final class DockBackdropPanel: NSPanel {
 
     let backdropView = NSImageView()
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, ink: Ink) {
         super.init(
             contentRect: screen.frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -91,7 +91,7 @@ final class DockBackdropPanel: NSPanel {
         titlebarAppearsTransparent = true
         title = "GridBack Dock Backdrop"
         identifier = NSUserInterfaceItemIdentifier("GridBackDockBackdrop")
-        appearance = NSAppearance(named: .darkAqua)
+        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
         ignoresMouseEvents = true
         BackdropSurface.prepare(imageView: backdropView, in: self)
     }

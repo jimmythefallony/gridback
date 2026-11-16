@@ -4,13 +4,14 @@ import SwiftUI
 struct SearchResultsView: View {
     @ObservedObject var model: GridBackModel
     var layout: LaunchGridLayout
+    @Environment(\.ink) private var ink
 
     var body: some View {
         Group {
             if model.searchResults.isEmpty {
                 Text(String(localized: "No matching apps"))
                     .font(.title3)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(ink.quiet.color)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {

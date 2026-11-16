@@ -1,4 +1,5 @@
 import AppKit
+import GridBackCore
 import SwiftUI
 
 struct AppIconButton: View {
@@ -10,6 +11,7 @@ struct AppIconButton: View {
     let action: () -> Void
 
     @State private var isHovering = false
+    @Environment(\.ink) private var ink
 
     var body: some View {
         Button(action: action) {
@@ -19,17 +21,17 @@ struct AppIconButton: View {
                     .scaleEffect(isHovering ? 1.06 : 1)
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ink.label.color)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(width: labelWidth)
-                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .gridTextShadow(ink.labelShadow)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(isSelected ? 0.28 : (isHovering ? 0.16 : 0)))
+                    .fill(ink.iconHighlight(selected: isSelected, hovering: isHovering).color)
             }
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
@@ -52,7 +54,7 @@ struct AppIconButton: View {
         } else {
             Image(systemName: "app.dashed")
                 .font(.system(size: iconSide * 0.55))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(ink.quiet.color)
         }
     }
 }

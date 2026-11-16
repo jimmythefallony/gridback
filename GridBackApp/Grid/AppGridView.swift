@@ -12,6 +12,7 @@ struct AppGridView: View {
     var blockLaunch: Bool
     var displayFolders: [AppFolder]? = nil
     var suppressedAppID: String? = nil
+    @Environment(\.ink) private var ink
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -57,7 +58,7 @@ struct AppGridView: View {
             .overlay {
                 if armed {
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 3)
+                        .strokeBorder(ink.dropRing.color, lineWidth: 3)
                         .frame(width: layout.iconSide + 14, height: layout.iconSide + 14)
                         .offset(y: -(layout.labelHeight + layout.iconLabelGap) / 2)
                 }
@@ -85,6 +86,7 @@ struct FolderTile: View {
     var labelWidth: CGFloat
     var armed: Bool
     let action: () -> Void
+    @Environment(\.ink) private var ink
 
     var body: some View {
         Button(action: action) {
@@ -93,11 +95,11 @@ struct FolderTile: View {
                     .frame(width: iconSide, height: iconSide)
                 Text(name)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ink.label.color)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(width: labelWidth)
-                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .gridTextShadow(ink.labelShadow)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
@@ -111,10 +113,10 @@ struct FolderTile: View {
     private var folderIcon: some View {
         let mini = iconSide / 3.6
         return RoundedRectangle(cornerRadius: iconSide * 0.22, style: .continuous)
-            .fill(Color.white.opacity(armed ? 0.28 : 0.16))
+            .fill(ink.folderFill(armed: armed).color)
             .overlay {
                 RoundedRectangle(cornerRadius: iconSide * 0.22, style: .continuous)
-                    .strokeBorder(Color.white.opacity(armed ? 0.95 : 0.28), lineWidth: armed ? 3 : 1)
+                    .strokeBorder(ink.folderStroke(armed: armed).color, lineWidth: armed ? 3 : 1)
             }
             .overlay {
                 LazyVGrid(columns: Array(repeating: SwiftUI.GridItem(.fixed(mini), spacing: 3), count: 3), spacing: 3) {
@@ -144,17 +146,18 @@ struct FolderTile: View {
 struct SearchPill: View {
     @Binding var query: String
     @FocusState var isFocused: Bool
+    @Environment(\.ink) private var ink
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color.white.opacity(0.65))
+                .foregroundStyle(ink.muted.color)
             SearchPillField(text: $query, isFocused: $isFocused)
         }
         .font(.system(size: 16, weight: .medium))
         .padding(.horizontal, 18)
         .frame(width: 280, height: 40)
-        .background(Color.white.opacity(0.16), in: Capsule())
+        .background(ink.searchPill.color, in: Capsule())
         .contentShape(Capsule())
         .onTapGesture { isFocused = true }
         .accessibilityLabel(String(localized: "Search"))
@@ -163,10 +166,11 @@ struct SearchPill: View {
 }
 
 /// The system text field draws its placeholder in dark grey and its caret in
-/// the accent blue. This field keeps the same typing behavior with white text.
+/// the accent blue. This field paints both from the ink instead.
 private struct SearchPillField: NSViewRepresentable {
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
+    @Environment(\.ink) private var ink
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, isFocused: isFocused)
@@ -179,8 +183,7 @@ private struct SearchPillField: NSViewRepresentable {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = SearchPillTextField.font
-        field.textColor = .white
-        field.placeholderAttributedString = SearchPillTextField.placeholder
+        field.apply(ink)
         field.delegate = context.coordinator
         field.setAccessibilityLabel(String(localized: "Search"))
         return field
@@ -194,9 +197,7 @@ private struct SearchPillField: NSViewRepresentable {
             field.stringValue = text
             context.coordinator.isUpdatingFromModel = false
         }
-        field.textColor = .white
-        field.placeholderAttributedString = SearchPillTextField.placeholder
-        field.paintCaret()
+        field.apply(ink)
         guard isFocused.wrappedValue, let window = field.window else { return }
         let editor = field.currentEditor()
         guard window.firstResponder !== field, window.firstResponder !== editor else { return }
@@ -242,17 +243,26 @@ private struct SearchPillField: NSViewRepresentable {
 private final class SearchPillTextField: NSTextField {
     static let font = NSFont.systemFont(ofSize: 16, weight: .medium)
 
-    static var placeholder: NSAttributedString {
+    private var caretNSColor: NSColor?
+
+    static func placeholder(_ color: NSColor) -> NSAttributedString {
         NSAttributedString(
             string: String(localized: "Search"),
             attributes: [
-                .foregroundColor: NSColor.white.withAlphaComponent(0.65),
+                .foregroundColor: color,
                 .font: font
             ]
         )
     }
 
     override var allowsVibrancy: Bool { false }
+
+    func apply(_ ink: Ink) {
+        textColor = ink.searchText.nsColor
+        caretNSColor = ink.searchCaret.nsColor
+        placeholderAttributedString = Self.placeholder(ink.searchPlaceholder.nsColor)
+        paintCaret()
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -262,8 +272,8 @@ private final class SearchPillTextField: NSTextField {
     }
 
     func paintCaret() {
-        guard let editor = currentEditor() as? NSTextView else { return }
-        editor.insertionPointColor = .white
-        editor.textColor = .white
+        guard let editor = currentEditor() as? NSTextView, let caretNSColor else { return }
+        editor.insertionPointColor = caretNSColor
+        editor.textColor = textColor
     }
 }
