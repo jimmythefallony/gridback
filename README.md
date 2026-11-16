@@ -49,6 +49,8 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 
 ## Known issues
 
+- Wallpapers your account isn't allowed to read show a plain dark background.
+- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive or external drives show a plain dark background, because GridBack never asks for extra permissions.
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
 

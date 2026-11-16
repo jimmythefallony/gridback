@@ -30,6 +30,7 @@ final class OverlayController: NSObject {
     /// Last decision written to the log, so one open records one line.
     private var loggedDecision = ""
     private var loggedGeneration = -1
+    private var loggedSolidColorNames = false
     /// System appearance last used for the blur. The grid window's own appearance is not this.
     private var lastSystemAppearance: WallpaperAppearance?
     private var appearanceObservation: NSKeyValueObservation?
@@ -313,7 +314,21 @@ final class OverlayController: NSObject {
         guard showGeneration != loggedGeneration || line != loggedDecision else { return }
         loggedGeneration = showGeneration
         loggedDecision = line
+        if !loggedSolidColorNames {
+            loggedSolidColorNames = true
+            let names = WallpaperSolidColors.normalizedNames().joined(separator: ",")
+            log.info("DesktopPicture solidColorNames=\(names.isEmpty ? "none" : names, privacy: .public)")
+        }
         log.info("DesktopPicture source=\(job.source.rawValue, privacy: .public) provider=\(provider, privacy: .public) configKeys=\(keys, privacy: .public) kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public) colorValues=\(colors, privacy: .public)")
+        if !job.urlLog.isEmpty {
+            log.info("DesktopPicture \(job.urlLog, privacy: .public)")
+        }
+        if !job.matchLog.isEmpty {
+            log.info("DesktopPicture \(job.matchLog, privacy: .public)")
+        }
+        if !job.structureLog.isEmpty {
+            log.info("DesktopPicture structure=\(job.structureLog, privacy: .public)")
+        }
     }
 
     private func startPictureRender(_ job: DesktopPictureJob, generation: Int) {
@@ -375,7 +390,8 @@ final class OverlayController: NSObject {
             log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
         case .plainBlur:
             log.error("DesktopPicture unavailable; opening with the neutral fill")
-            showSharedFill(WallpaperNeutralFill.color(for: job?.appearance ?? .dark), job: job)
+            let fill = job?.solidColor ?? WallpaperNeutralFill.color(for: job?.appearance ?? .dark)
+            showSharedFill(fill, job: job)
             revealGrid()
         case .picture:
             guard let image, let job else { return }
@@ -533,6 +549,9 @@ struct DesktopPictureJob {
     var provider: String
     var configKeys: [String]
     var colorValueLog: String
+    var urlLog: String = ""
+    var matchLog: String = ""
+    var structureLog: String = ""
     var solidColor: WallpaperSolidColor?
     var pointSize: NSSize
     var pixelWidth: Int
@@ -567,10 +586,12 @@ enum DesktopPicture {
     /// photo URL is used.
     static func job(on screen: NSScreen) -> DesktopPictureJob {
         let appearance = systemAppearance()
-        let workspacePath = NSWorkspace.shared.desktopImageURL(for: screen)?.standardizedFileURL.path
+        let workspacePath = NSWorkspace.shared.desktopImageURL(for: screen)?.path
         let stored = WallpaperStoreReader.load()
         var choice = stored.choice
-        if choice?.solidColor == nil, let colorPath = choice?.solidColorImagePath {
+        if choice?.solidColor == nil,
+           let colorPath = choice?.solidColorImagePath,
+           !WallpaperPathPlace.classify(colorPath).isProtected {
             choice?.solidColor = WallpaperFileMetadata.averageColor(at: URL(fileURLWithPath: colorPath))
         }
         if choice?.provider == WallpaperStoreIndex.colorProvider,
@@ -579,16 +600,90 @@ enum DesktopPicture {
            let file = WallpaperSolidColors.existingFile(matching: name) {
             choice?.solidColor = WallpaperFileMetadata.averageColor(at: URL(fileURLWithPath: file))
         }
-        let readable = choice?.imageFilePath.map { path in
-            var directory: ObjCBool = false
-            return FileManager.default.isReadableFile(atPath: path)
-                && !(FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue)
-        } ?? false
-        let decision = WallpaperChoicePolicy.resolve(
+        if choice?.solidColor == nil, let archived = choice?.archivedColor {
+            choice?.solidColor = WallpaperArchivedColor.color(from: archived)
+        }
+        let access = WallpaperFileAccess.inspect(choice)
+        if let usable = access.usablePath {
+            choice?.imageFilePath = usable
+        }
+        choice?.locationBlocked = access.locationBlocked
+        if access.locationBlocked || access.reason == "unreadable" {
+            choice?.allowLegacy = false
+        }
+        var decision = WallpaperChoicePolicy.resolve(
             choice: choice,
             workspacePath: workspacePath,
-            imageFileReadable: readable
+            imageFileReadable: access.usablePath != nil,
+            storeFileExists: access.storeFileExists
         )
+        if case .imageFile(let path) = decision.use {
+            if WallpaperFileAccess.look(path) == nil {
+                decision = (source: decision.source, use: .plainBlur, kind: .fallback)
+            } else if access.usablePath != path, let looked = WallpaperFileAccess.look(path), !looked.readable {
+                decision = looked.exists
+                    ? (source: decision.source, use: .plainBlur, kind: .unreadable)
+                    : (source: decision.source, use: .plainBlur, kind: .fallback)
+            }
+        }
+        let legacyProtected = workspacePath.map { WallpaperPathPlace.classify($0).isProtected } ?? false
+        let skippingProtected = access.protected || (legacyProtected && decision.use == .plainBlur && (choice == nil || choice?.provider == WallpaperStoreIndex.imageProvider))
+        let urlLog: String
+        if !access.protected && (access.reason == "unreadable" || decision.kind == .unreadable) {
+            urlLog = WallpaperURLLog.line(
+                shape: choice?.urlShape ?? "none",
+                filesCount: choice?.filesCount ?? 0,
+                pathParsed: access.pathParsed,
+                exists: access.exists,
+                readable: access.readable,
+                place: access.place,
+                ext: access.ext,
+                reason: "unreadable"
+            )
+        } else if access.protected {
+            urlLog = WallpaperURLLog.protected(
+                shape: choice?.urlShape ?? "none",
+                filesCount: choice?.filesCount ?? 0,
+                pathParsed: access.pathParsed,
+                place: access.place,
+                ext: access.ext
+            )
+        } else if skippingProtected, let workspacePath {
+            urlLog = WallpaperURLLog.protected(
+                shape: "String",
+                filesCount: 0,
+                pathParsed: true,
+                place: WallpaperPathPlace.classify(workspacePath).rawValue,
+                ext: WallpaperPathPlace.ext(of: workspacePath)
+            )
+        } else if choice?.provider == WallpaperStoreIndex.imageProvider {
+            var reason = access.reason
+            if decision.kind == .unreadable {
+                reason = "unreadable"
+            } else if decision.source == .legacy {
+                reason = "legacy"
+            }
+            urlLog = WallpaperURLLog.line(
+                shape: choice?.urlShape ?? "none",
+                filesCount: choice?.filesCount ?? 0,
+                pathParsed: access.pathParsed,
+                exists: access.exists,
+                readable: access.readable,
+                place: access.place,
+                ext: access.ext,
+                reason: reason
+            )
+        } else {
+            urlLog = ""
+        }
+        let matchLog: String
+        if choice?.provider == WallpaperStoreIndex.colorProvider {
+            let name = choice?.systemColorName ?? "none"
+            let matched = choice?.systemColorName != nil && choice?.solidColor != nil
+            matchLog = "matched=\(matched) name=\(name)"
+        } else {
+            matchLog = ""
+        }
         let scale = max(screen.backingScaleFactor, 1)
         let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
         let pixelH = max(1, Int((screen.frame.height * scale).rounded()))
@@ -599,6 +694,12 @@ enum DesktopPicture {
         var token = "plain"
         switch decision.use {
         case .imageFile(let path):
+            if WallpaperPathPlace.classify(path).isProtected {
+                kind = .fallback
+                color = WallpaperNeutralFill.color(for: .dark)
+                token = "protected"
+                break
+            }
             let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
             kind = WallpaperClassifier.kind(hints: read.hints, imageCount: read.imageCount)
             switch WallpaperClassifier.frame(kind: kind, hints: read.hints, appearance: appearance, imageCount: read.imageCount) {
@@ -616,8 +717,16 @@ enum DesktopPicture {
             token = colorToken(fill)
         case .plainBlur:
             kind = decision.kind
-            color = WallpaperNeutralFill.color(for: appearance)
-            token = "neutral"
+            if decision.kind == .unreadable {
+                color = WallpaperNeutralFill.color(for: .dark)
+                token = "unreadable"
+            } else if skippingProtected {
+                color = WallpaperNeutralFill.color(for: .dark)
+                token = "protected"
+            } else {
+                color = WallpaperNeutralFill.color(for: appearance)
+                token = "neutral"
+            }
         }
         return DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
@@ -638,6 +747,9 @@ enum DesktopPicture {
             provider: choice?.provider ?? "",
             configKeys: choice?.configKeys ?? [],
             colorValueLog: choice?.colorValueLog ?? "",
+            urlLog: urlLog,
+            matchLog: matchLog,
+            structureLog: choice?.structureLog ?? "",
             solidColor: color,
             pointSize: screen.frame.size,
             pixelWidth: pixelW,
@@ -742,7 +854,7 @@ enum DesktopPicture {
                 alpha: 1
             ))
             context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            return context.makeImage()
+            return dimmed(context, width: width, height: height)
         } else if let url = job.url {
             guard let wallpaper = decodedThumbnail(at: url, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) else {
                 return nil
@@ -802,7 +914,182 @@ enum DesktopPicture {
                 return nil
             }
         }
+        return dimmed(context, width: width, height: height)
+    }
+
+    /// One black veil on every backdrop, photo or flat, so both windows stay the same.
+    private static func dimmed(_ context: CGContext, width: Int, height: Int) -> CGImage? {
+        context.setFillColor(CGColor(gray: 0, alpha: CGFloat(WallpaperDim.black)))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
+    }
+}
+
+/// Checks a picture path only after its folder is known from the text.
+/// Desktop, Documents, Downloads, Photos, iCloud Drive, and external volumes are never opened.
+/// Bookmark data is not resolved, because resolving it reads the file.
+enum WallpaperFileAccess {
+    struct Report {
+        var usablePath: String?
+        var pathParsed: Bool
+        var exists: String
+        var readable: String
+        var place: String
+        var ext: String
+        var reason: String
+        var storeFileExists: Bool
+        var locationBlocked: Bool
+        var protected: Bool
+    }
+
+    struct Look {
+        var exists: Bool
+        var readable: Bool
+    }
+
+    static let empty = Report(
+        usablePath: nil,
+        pathParsed: false,
+        exists: "false",
+        readable: "false",
+        place: "other",
+        ext: "none",
+        reason: "none",
+        storeFileExists: false,
+        locationBlocked: false,
+        protected: false
+    )
+
+    static func inspect(_ choice: WallpaperStoreChoice?) -> Report {
+        guard let choice, choice.provider == WallpaperStoreIndex.imageProvider, !choice.isFolder else {
+            return empty
+        }
+        let listed = choice.imageCandidates.isEmpty
+            ? (choice.imageFilePath.map { [$0] } ?? [])
+            : choice.imageCandidates
+        let plan = WallpaperFileGate.plan(paths: listed)
+        if plan.statPaths.isEmpty {
+            if let place = plan.blockedPlace {
+                return blocked(place: place, ext: plan.blockedExt, parsed: plan.pathParsed)
+            }
+            return Report(
+                usablePath: nil,
+                pathParsed: plan.pathParsed,
+                exists: "false",
+                readable: "false",
+                place: "other",
+                ext: "none",
+                reason: "missing",
+                storeFileExists: false,
+                locationBlocked: false,
+                protected: false
+            )
+        }
+        if let found = status(of: plan.statPaths) {
+            return found
+        }
+        if let place = plan.blockedPlace {
+            return blocked(place: place, ext: plan.blockedExt, parsed: true)
+        }
+        let path = plan.statPaths[0]
+        return Report(
+            usablePath: nil,
+            pathParsed: true,
+            exists: "false",
+            readable: "false",
+            place: WallpaperPathPlace.classify(path).rawValue,
+            ext: WallpaperPathPlace.ext(of: path),
+            reason: "missing",
+            storeFileExists: false,
+            locationBlocked: false,
+            protected: false
+        )
+    }
+
+    /// Nil means the path is protected or not absolute, so the file was not touched.
+    static func look(_ path: String) -> Look? {
+        let normalized = WallpaperPathPlace.normalized(path)
+        if WallpaperPathPlace.classify(normalized).isProtected || !normalized.hasPrefix("/") {
+            return nil
+        }
+        var directory = ObjCBool(false)
+        let exists = FileManager.default.fileExists(atPath: normalized, isDirectory: &directory)
+        if !exists || directory.boolValue {
+            return Look(exists: false, readable: false)
+        }
+        return Look(exists: true, readable: FileManager.default.isReadableFile(atPath: normalized))
+    }
+
+    private static func blocked(place: WallpaperPathPlace, ext: String, parsed: Bool) -> Report {
+        Report(
+            usablePath: nil,
+            pathParsed: parsed,
+            exists: "skipped",
+            readable: "skipped",
+            place: place.rawValue,
+            ext: ext,
+            reason: "protected",
+            storeFileExists: false,
+            locationBlocked: true,
+            protected: true
+        )
+    }
+
+    /// The paths have already been classified as safe. Protected paths are ignored again here.
+    private static func status(of paths: [String]) -> Report? {
+        var unreadable: Report?
+        for path in paths {
+            if WallpaperPathPlace.classify(path).isProtected || !path.hasPrefix("/") { continue }
+            var directory = ObjCBool(false)
+            let exists = FileManager.default.fileExists(atPath: path, isDirectory: &directory)
+            if !exists || directory.boolValue { continue }
+            let place = WallpaperPathPlace.classify(path).rawValue
+            let ext = WallpaperPathPlace.ext(of: path)
+            if FileManager.default.isReadableFile(atPath: path) {
+                return Report(
+                    usablePath: path,
+                    pathParsed: true,
+                    exists: "true",
+                    readable: "true",
+                    place: place,
+                    ext: ext,
+                    reason: "storeFile",
+                    storeFileExists: true,
+                    locationBlocked: false,
+                    protected: false
+                )
+            }
+            if unreadable == nil {
+                unreadable = Report(
+                    usablePath: nil,
+                    pathParsed: true,
+                    exists: "true",
+                    readable: "false",
+                    place: place,
+                    ext: ext,
+                    reason: "unreadable",
+                    storeFileExists: true,
+                    locationBlocked: false,
+                    protected: false
+                )
+            }
+        }
+        return unreadable
+    }
+}
+
+enum WallpaperArchivedColor {
+    static func color(from data: Data) -> WallpaperSolidColor? {
+        guard WallpaperKeyedArchive.isKeyedArchive(data),
+              let color = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: data),
+              let rgb = color.usingColorSpace(.sRGB) else {
+            return nil
+        }
+        return WallpaperSolidColor(
+            red: Double(rgb.redComponent),
+            green: Double(rgb.greenComponent),
+            blue: Double(rgb.blueComponent)
+        )
     }
 }
 
@@ -811,6 +1098,16 @@ enum DesktopPicture {
 /// A sandboxed App Store build cannot read this file. Photos still come from
 /// the legacy picture URL; every other wallpaper then uses the plain blur.
 enum WallpaperSolidColors {
+    static func normalizedNames() -> [String] {
+        let directory = WallpaperStoreIndex.solidColorsDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return [] }
+        return names
+            .filter { $0.lowercased().hasSuffix(".png") }
+            .map { WallpaperSolidColorMatch.normalize((($0 as NSString).deletingPathExtension)) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
+
     static func existingFile(matching name: String) -> String? {
         let directory = WallpaperStoreIndex.solidColorsDirectory
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory),
