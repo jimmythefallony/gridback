@@ -6,7 +6,7 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is version 0.3.5. It is open source, and it is not a finished product.
+This is version 0.3.6. It is open source, and it is not a finished product.
 
 ## Privacy
 
@@ -54,7 +54,7 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
 
-The app is unsigned and not notarized. macOS will warn you the first time you open a downloaded copy. That is expected. See below.
+The app is ad-hoc signed and not notarized. macOS will warn you the first time you open a downloaded copy. That is expected. See below.
 
 ## What you need
 
@@ -82,7 +82,7 @@ Uninstalling does not turn off Start at login. Remove GridBack in **System Setti
 
 ### Download the zip
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.5.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.6.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 
@@ -99,7 +99,7 @@ On current macOS, including macOS 26 and 27, Apple’s own steps are:
 
 After that, you can open GridBack by double-clicking it, the same as any other app.
 
-You can also try a right-click (or Control-click) on the app, choose **Open**, then **Open** again. On current macOS that choice is often not offered for an app that is not signed and notarized. If you do not see it, use **Privacy & Security** as above. These steps follow Apple’s guide, [Safely open apps on your Mac](https://support.apple.com/en-us/102445).
+You can also try a right-click (or Control-click) on the app, choose **Open**, then **Open** again. On current macOS that choice is often not offered for an app that is not notarized. If you do not see it, use **Privacy & Security** as above. These steps follow Apple’s guide, [Safely open apps on your Mac](https://support.apple.com/en-us/102445).
 
 ## Build it yourself
 
