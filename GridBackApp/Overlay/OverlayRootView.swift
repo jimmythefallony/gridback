@@ -63,11 +63,11 @@ struct OverlayRootView: View {
                     if model.isScanning && model.appsByID.isEmpty {
                         Text(String(localized: "Looking for apps…"))
                             .font(.title3)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(model.ink.label.color)
                     } else if pages.isEmpty && !model.isSearching {
                         Text(String(localized: "No apps found in Applications, System Applications, or your home Applications folder."))
                             .font(.title3)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(model.ink.label.color)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 520)
                     } else if model.isSearching {
@@ -197,6 +197,7 @@ struct OverlayRootView: View {
                 }
             }
         }
+        .environment(\.ink, model.ink)
     }
 
     private var displayedPage: Int {
@@ -930,6 +931,7 @@ private struct FolderCover: View {
     @Binding var iconFrames: [String: CGRect]
     @Binding var panelFrame: CGRect
     var hiddenID: String?
+    @Environment(\.ink) private var ink
     @State private var name: String = ""
     @State private var revealed = false
     @State private var titleShown = false
@@ -1002,8 +1004,8 @@ private struct FolderCover: View {
             .textFieldStyle(.plain)
             .multilineTextAlignment(.center)
             .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+            .foregroundStyle(ink.label.color)
+            .gridTextShadow(ink.folderTitleShadow)
             .frame(maxWidth: 280)
             .focused($nameFocused)
             .onSubmit { commitName() }
@@ -1041,11 +1043,11 @@ private struct FolderCover: View {
                 }
                 Text(model.appsByID[id]?.displayName ?? id)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ink.label.color)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(width: max(icon.side + 12, 64))
-                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .gridTextShadow(ink.labelShadow)
                     .position(x: icon.centerX, y: icon.centerY + icon.side / 2 + 18)
                     .opacity(id == hiddenID ? 0 : progress)
             }
@@ -1057,12 +1059,12 @@ private struct FolderCover: View {
         .frame(width: shape.width, height: shape.height)
         .background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Color.white.opacity(0.24))
+                .fill(ink.folderPanelFill.color)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
         .overlay {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.45), lineWidth: 1)
+                .strokeBorder(ink.folderPanelStroke.color, lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
@@ -1088,7 +1090,7 @@ private struct FolderCover: View {
             } else {
                 Image(systemName: "app.dashed")
                     .font(.system(size: side * 0.55))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(ink.quiet.color)
             }
         }
         .frame(width: side, height: side)

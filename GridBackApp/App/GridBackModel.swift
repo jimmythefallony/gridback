@@ -34,6 +34,9 @@ final class GridBackModel: ObservableObject {
     /// Menu bar and Dock space taken from the screen's visible frame. Zero on
     /// an edge means that edge is not reserved, including an auto-hidden Dock.
     @Published private(set) var screenReserve = ScreenReserve.none
+    /// Foreground ink for the open grid. Light is today's white-on-dark look.
+    /// Dark ink is for a light backdrop and is not selected.
+    var ink: Ink { .light }
 
     weak var delegate: GridBackUIDelegate?
 

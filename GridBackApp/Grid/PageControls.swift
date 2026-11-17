@@ -1,9 +1,11 @@
+import GridBackCore
 import SwiftUI
 
 struct PageControls: View {
     var pageCount: Int
     var position: CGFloat
     var onSelect: (Int) -> Void
+    @Environment(\.ink) private var ink
 
     var body: some View {
         HStack(spacing: 18) {
@@ -15,7 +17,7 @@ struct PageControls: View {
                 ForEach(0..<pageCount, id: \.self) { index in
                     let distance = min(abs(position - CGFloat(index)), 1)
                     Circle()
-                        .fill(Color.white.opacity(0.95 - Double(distance) * 0.62))
+                        .fill(ink.pageDot(distance: Double(distance)).color)
                         .frame(width: 8 - distance * 2.5, height: 8 - distance * 2.5)
                         .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
@@ -43,7 +45,7 @@ struct PageControls: View {
     ) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white.opacity(enabled ? 0.9 : 0.28))
+            .foregroundStyle(ink.pageArrow(enabled: enabled).color)
             .frame(width: 36, height: 36)
             .contentShape(Rectangle())
             .onTapGesture { if enabled { action() } }
