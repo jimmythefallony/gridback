@@ -1,3 +1,4 @@
+#if canImport(AppKit)
 import AppKit
 import GridBackCore
 import XCTest
@@ -74,3 +75,4 @@ final class EscapeDeliveryTests: XCTestCase {
         XCTAssertEqual(drag.complete(), .none)
     }
 }
+#endif

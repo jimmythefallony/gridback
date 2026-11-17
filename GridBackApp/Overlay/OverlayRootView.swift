@@ -140,6 +140,19 @@ struct OverlayRootView: View {
                         .padding(.bottom, max(72, model.screenReserve.bottom + 24))
                 }
             }
+            .overlay(alignment: .top) {
+                if let note = model.quitNote {
+                    QuitNote(
+                        text: note,
+                        foreground: model.ink.label.color,
+                        background: model.ink.searchPill.color
+                    )
+                    .id(model.quitNoteID)
+                    .shadow(color: .black.opacity(0.28), radius: 8, y: 2)
+                    .padding(.top, chrome.searchCenterY + 26)
+                    .allowsHitTesting(false)
+                }
+            }
             .coordinateSpace(name: "overlay")
             .simultaneousGesture(reorderGesture(layout: chrome, overlaySize: overlay.size))
             .background {
@@ -858,6 +871,38 @@ struct OverlayRootView: View {
             .padding(.vertical, 8)
             .background(color, in: Capsule())
             .shadow(radius: 8, y: 2)
+    }
+}
+
+struct QuitNote: View {
+    var text: String
+    var foreground: Color
+    var background: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var opacity: Double = 1
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(foreground)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .frame(maxWidth: 360)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(background, in: Capsule())
+            .opacity(opacity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+            .accessibilityAddTraits(.updatesFrequently)
+            .onAppear {
+                guard !reduceMotion else { return }
+                let fade = 0.4
+                let delay = max(0, QuitConfirmation.window - fade)
+                withAnimation(.easeOut(duration: fade).delay(delay)) {
+                    opacity = 0
+                }
+            }
     }
 }
 

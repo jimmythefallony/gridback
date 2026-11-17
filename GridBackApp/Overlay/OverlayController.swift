@@ -406,7 +406,7 @@ final class OverlayController: NSObject {
     /// twice, so the grid and the Dock band would not match. Reduce Transparency
     /// stays sensible because this image is already flat or already blurred.
     private func showSharedFill(_ color: WallpaperSolidColor, job: DesktopPictureJob?) {
-        guard let panel, let backdrop = dockBackdrop else { return }
+        guard let panel, let _ = dockBackdrop else { return }
         let width = job?.pixelWidth ?? 32
         let height = job?.pixelHeight ?? 32
         let pointSize = job?.pointSize ?? panel.frame.size

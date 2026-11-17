@@ -72,6 +72,15 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if let note = model.quitNote {
+                QuitNote(
+                    text: note,
+                    foreground: Color.secondary,
+                    background: Color.primary.opacity(0.08)
+                )
+                .id(model.quitNoteID)
+            }
+
             Spacer(minLength: 0)
         }
         .padding(24)

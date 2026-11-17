@@ -31,6 +31,10 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var shortcutStatus: String?
     @Published private(set) var isScanning = true
     @Published private(set) var iconImages: [String: NSImage] = [:]
+    /// Shown after the first Command-Q while a GridBack window is key.
+    @Published private(set) var quitNote: String?
+    /// Bumps on each arm so the note can fade again.
+    @Published private(set) var quitNoteID = 0
     /// Menu bar and Dock space taken from the screen's visible frame. Zero on
     /// an edge means that edge is not reserved, including an auto-hidden Dock.
     @Published private(set) var screenReserve = ScreenReserve.none
@@ -51,6 +55,8 @@ final class GridBackModel: ObservableObject {
     private var scanInFlight = false
     private var scanQueued = false
     private var launchErrorTicket = 0
+    private var quitConfirmation = QuitConfirmation()
+    private var quitNoteTicket = 0
 
     var isSearching: Bool {
         !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -137,12 +143,45 @@ final class GridBackModel: ObservableObject {
     }
 
     func setSearchQuery(_ text: String) {
-        guard text != searchQuery else { return }
-        searchQuery = text
+        let cleaned = SearchQueryText.cleaned(text)
+        guard cleaned != searchQuery else { return }
+        searchQuery = cleaned
         selectedResultIndex = 0
         launchError = nil
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             requestCloseFolder()
+        }
+    }
+
+    /// Command-Q while a GridBack window is key. The first press shows a note.
+    /// A second press inside the confirmation window quits. Returns true when
+    /// the key event should be swallowed.
+    func takeQuitChord(
+        keyCode: UInt16,
+        modifiers: KeyModifiers,
+        at time: TimeInterval,
+        windowIsKey: Bool,
+        isRepeat: Bool
+    ) -> Bool {
+        switch quitConfirmation.decide(
+            keyCode: keyCode,
+            modifiers: modifiers,
+            at: time,
+            windowIsKey: windowIsKey,
+            isRepeat: isRepeat
+        ) {
+        case .pass:
+            return false
+        case .swallow:
+            return true
+        case .arm:
+            showQuitNote()
+            return true
+        case .quit:
+            quitNoteTicket += 1
+            quitNote = nil
+            NSApp.terminate(nil)
+            return true
         }
     }
 
@@ -228,9 +267,12 @@ final class GridBackModel: ObservableObject {
     private func apply(_ action: SearchKeyAction) -> Bool {
         switch action {
         case .startOrAppend(let text):
-            searchQuery.append(text)
-            selectedResultIndex = 0
-            launchError = nil
+            let updated = SearchQueryText.cleaned(searchQuery + text)
+            if updated != searchQuery {
+                searchQuery = updated
+                selectedResultIndex = 0
+                launchError = nil
+            }
         case .backspace:
             if !searchQuery.isEmpty {
                 searchQuery.removeLast()
@@ -512,6 +554,31 @@ final class GridBackModel: ObservableObject {
         } else if currentPage >= layout.pages.count {
             currentPage = layout.pages.count - 1
         }
+    }
+
+    private func showQuitNote() {
+        quitNoteTicket += 1
+        let ticket = quitNoteTicket
+        quitNoteID += 1
+        let note = String(localized: "Press ⌘Q again to quit GridBack")
+        quitNote = note
+        announceQuit(note)
+        DispatchQueue.main.asyncAfter(deadline: .now() + QuitConfirmation.window) { [weak self] in
+            guard let self, self.quitNoteTicket == ticket else { return }
+            self.quitNote = nil
+        }
+    }
+
+    private func announceQuit(_ note: String) {
+        let element: Any = NSApp.keyWindow ?? NSApp!
+        NSAccessibility.post(
+            element: element,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: note,
+                .priority: NSNumber(value: NSAccessibilityPriorityLevel.high.rawValue)
+            ]
+        )
     }
 
     private func showLaunchError(_ message: String) {
