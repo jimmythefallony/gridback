@@ -62,9 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
                 return nil
             }
             let modifiers = KeyModifiers(eventFlags: event.modifierFlags)
+            let quitFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if self.model.takeQuitChord(
-                keyCode: event.keyCode,
-                modifiers: modifiers,
+                characters: event.charactersIgnoringModifiers ?? "",
+                modifiers: KeyModifiers(eventFlags: quitFlags),
                 at: event.timestamp,
                 windowIsKey: NSApp.keyWindow != nil,
                 isRepeat: event.isARepeat

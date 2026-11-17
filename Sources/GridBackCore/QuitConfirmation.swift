@@ -2,13 +2,14 @@ import Foundation
 
 /// Two presses of Command-Q quit. The first only arms a short confirmation.
 ///
+/// The chord is the typed character "q", compared case-insensitively, with
+/// Command as the only modifier.
+///
 /// The clock is whatever the caller passes in. A press while no GridBack window
 /// is key does nothing, including leaving an existing arm alone.
 public struct QuitConfirmation: Equatable, Sendable {
     /// How long the second press still counts, in seconds.
     public static let window: TimeInterval = 2
-    /// ANSI Q.
-    public static let quitKeyCode: UInt16 = 12
 
     public enum Decision: Equatable, Sendable {
         /// Not this chord, or no GridBack window is key. Leave the event alone.
@@ -25,13 +26,13 @@ public struct QuitConfirmation: Equatable, Sendable {
     public init() {}
 
     public mutating func decide(
-        keyCode: UInt16,
+        characters: String,
         modifiers: KeyModifiers,
         at now: TimeInterval,
         windowIsKey: Bool,
         isRepeat: Bool
     ) -> Decision {
-        guard keyCode == Self.quitKeyCode, modifiers == .command else {
+        guard modifiers == .command, characters.lowercased() == "q" else {
             return .pass
         }
         guard windowIsKey else {

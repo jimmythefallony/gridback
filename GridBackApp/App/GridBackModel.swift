@@ -157,14 +157,14 @@ final class GridBackModel: ObservableObject {
     /// A second press inside the confirmation window quits. Returns true when
     /// the key event should be swallowed.
     func takeQuitChord(
-        keyCode: UInt16,
+        characters: String,
         modifiers: KeyModifiers,
         at time: TimeInterval,
         windowIsKey: Bool,
         isRepeat: Bool
     ) -> Bool {
         switch quitConfirmation.decide(
-            keyCode: keyCode,
+            characters: characters,
             modifiers: modifiers,
             at: time,
             windowIsKey: windowIsKey,

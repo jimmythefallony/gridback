@@ -2,11 +2,15 @@ import XCTest
 import GridBackCore
 
 final class QuitConfirmationTests: XCTestCase {
-    private let quit = QuitConfirmation.quitKeyCode
-
-    func testConfirmationWindowIsAboutTwoSecondsAndUsesTheQKey() {
+    func testConfirmationWindowIsTwoSeconds() {
         XCTAssertEqual(QuitConfirmation.window, 2)
-        XCTAssertEqual(QuitConfirmation.quitKeyCode, 12)
+    }
+
+    func testQWithCommandArms() {
+        var confirm = QuitConfirmation()
+        XCTAssertEqual(press(confirm: &confirm, characters: "q", at: 10), .arm(until: 12))
+        XCTAssertEqual(press(confirm: &confirm, characters: "q", at: 12), .quit)
+        XCTAssertEqual(press(confirm: &confirm, characters: "Q", at: 12), .arm(until: 14))
     }
 
     func testFirstPressArmsAndSecondPressInsideTheWindowQuits() {
@@ -31,7 +35,7 @@ final class QuitConfirmationTests: XCTestCase {
         XCTAssertEqual(press(confirm: &confirm, at: 5.5), .quit)
     }
 
-    func testRepeatDoesNotArmOrQuit() {
+    func testRepeatsAreSwallowed() {
         var confirm = QuitConfirmation()
         XCTAssertEqual(press(confirm: &confirm, at: 0, isRepeat: true), .swallow)
         XCTAssertEqual(press(confirm: &confirm, at: 1), .arm(until: 3))
@@ -39,34 +43,76 @@ final class QuitConfirmationTests: XCTestCase {
         XCTAssertEqual(press(confirm: &confirm, at: 2), .quit)
     }
 
-    func testOtherChordsDoNotArmOrQuit() {
+    /// Key code 12 is the physical US Q key. On AZERTY that key types "a",
+    /// and on Dvorak it types an apostrophe. The character decides.
+    func testKeyCode12WithCharacterADoesNotArm() {
         var confirm = QuitConfirmation()
-        let samples: [(UInt16, KeyModifiers)] = [
-            (0, .command),
-            (6, [.command, .shift]),
-            (quit, [.command, .shift]),
-            (quit, [.command, .option]),
-            (quit, [.command, .control]),
-            (quit, []),
+        XCTAssertEqual(press(confirm: &confirm, characters: "a", at: 1), .pass)
+        XCTAssertEqual(press(confirm: &confirm, characters: "a", at: 1, isRepeat: true), .pass)
+        XCTAssertEqual(press(confirm: &confirm, characters: "'", at: 1), .pass)
+        XCTAssertEqual(press(confirm: &confirm, characters: "q", at: 1), .arm(until: 3))
+        XCTAssertEqual(press(confirm: &confirm, characters: "a", at: 2), .pass)
+        XCTAssertEqual(press(confirm: &confirm, characters: "q", at: 2), .quit)
+    }
+
+    func testShiftAndOptionVariantsDoNotArm() {
+        var confirm = QuitConfirmation()
+        let samples: [(String, KeyModifiers)] = [
+            ("q", [.command, .shift]),
+            ("Q", [.command, .shift]),
+            ("q", [.command, .option]),
+            ("q", [.command, .control]),
+            ("q", [.command, .shift, .option]),
+            ("q", []),
+            ("", .command),
         ]
-        for (keyCode, modifiers) in samples {
+        for (characters, modifiers) in samples {
             XCTAssertEqual(
-                confirm.decide(keyCode: keyCode, modifiers: modifiers, at: 1, windowIsKey: true, isRepeat: false),
+                confirm.decide(
+                    characters: characters,
+                    modifiers: modifiers,
+                    at: 1,
+                    windowIsKey: true,
+                    isRepeat: false
+                ),
                 .pass
             )
         }
         XCTAssertEqual(press(confirm: &confirm, at: 1), .arm(until: 3))
+        XCTAssertEqual(
+            confirm.decide(
+                characters: "q",
+                modifiers: [.command, .shift],
+                at: 1.5,
+                windowIsKey: true,
+                isRepeat: false
+            ),
+            .pass
+        )
+        XCTAssertEqual(
+            confirm.decide(
+                characters: "q",
+                modifiers: [.command, .option],
+                at: 1.5,
+                windowIsKey: true,
+                isRepeat: false
+            ),
+            .pass
+        )
+        XCTAssertEqual(press(confirm: &confirm, at: 2), .quit)
     }
 
     private func press(
         confirm: inout QuitConfirmation,
+        characters: String = "q",
         at now: TimeInterval,
+        modifiers: KeyModifiers = .command,
         windowIsKey: Bool = true,
         isRepeat: Bool = false
     ) -> QuitConfirmation.Decision {
         confirm.decide(
-            keyCode: quit,
-            modifiers: .command,
+            characters: characters,
+            modifiers: modifiers,
             at: now,
             windowIsKey: windowIsKey,
             isRepeat: isRepeat
