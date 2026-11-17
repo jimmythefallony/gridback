@@ -1061,12 +1061,12 @@ final class WallpaperClassificationTests: XCTestCase {
         XCTAssertTrue(pathLike.hasPrefix("String("))
         let dark = WallpaperNeutralFill.color(for: .dark)
         let light = WallpaperNeutralFill.color(for: .light)
-        XCTAssertEqual(dark.red, 0.17, accuracy: 0.001)
-        XCTAssertEqual(dark.green, 0.17, accuracy: 0.001)
-        XCTAssertEqual(dark.blue, 0.17, accuracy: 0.001)
-        XCTAssertEqual(light.red, 0.30, accuracy: 0.001)
-        XCTAssertEqual(light.green, 0.30, accuracy: 0.001)
-        XCTAssertEqual(light.blue, 0.30, accuracy: 0.001)
+        XCTAssertEqual(dark.red, Double(0x30) / 255, accuracy: 0.000_000_1)
+        XCTAssertEqual(dark.green, Double(0x32) / 255, accuracy: 0.000_000_1)
+        XCTAssertEqual(dark.blue, Double(0x38) / 255, accuracy: 0.000_000_1)
+        XCTAssertEqual(light.red, Double(0xE6) / 255, accuracy: 0.000_000_1)
+        XCTAssertEqual(light.green, Double(0xE8) / 255, accuracy: 0.000_000_1)
+        XCTAssertEqual(light.blue, Double(0xEB) / 255, accuracy: 0.000_000_1)
         XCTAssertEqual(WallpaperDim.black, 0.25, accuracy: 0.001)
     }
 

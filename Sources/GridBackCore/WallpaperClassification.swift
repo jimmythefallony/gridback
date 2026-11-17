@@ -437,15 +437,23 @@ public enum WallpaperReportedImage {
 }
 
 public enum WallpaperNeutralFill {
-    /// A calm grey, one for Light and one for Dark. It is already flat, so
-    /// Reduce Transparency does not need a second material.
+    /// #E6E8EB in Light and #303238 in Dark. Already flat, so Reduce Transparency
+    /// does not need a second material.
     public static func color(for appearance: WallpaperAppearance) -> WallpaperSolidColor {
         switch appearance {
         case .dark:
-            return WallpaperSolidColor(red: 0.17, green: 0.17, blue: 0.17)
+            return byteColor(0x30, 0x32, 0x38)
         case .light:
-            return WallpaperSolidColor(red: 0.30, green: 0.30, blue: 0.30)
+            return byteColor(0xE6, 0xE8, 0xEB)
         }
+    }
+
+    private static func byteColor(_ red: Int, _ green: Int, _ blue: Int) -> WallpaperSolidColor {
+        WallpaperSolidColor(
+            red: Double(red) / 255,
+            green: Double(green) / 255,
+            blue: Double(blue) / 255
+        )
     }
 }
 

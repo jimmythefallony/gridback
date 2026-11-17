@@ -34,9 +34,8 @@ final class GridBackModel: ObservableObject {
     /// Menu bar and Dock space taken from the screen's visible frame. Zero on
     /// an edge means that edge is not reserved, including an auto-hidden Dock.
     @Published private(set) var screenReserve = ScreenReserve.none
-    /// Foreground ink for the open grid. Light is today's white-on-dark look.
-    /// Dark ink is for a light backdrop and is not selected.
-    var ink: Ink { .light }
+    /// Foreground ink for the open grid. The overlay sets this with the backdrop.
+    @Published private(set) var ink: Ink = .light
 
     weak var delegate: GridBackUIDelegate?
 
@@ -88,6 +87,12 @@ final class GridBackModel: ObservableObject {
     func updateScreenReserve(_ reserve: ScreenReserve) {
         guard reserve != screenReserve else { return }
         screenReserve = reserve
+    }
+
+    /// The overlay calls this in the same turn it shows the backdrop. Nothing else writes the ink.
+    func setInk(_ ink: Ink) {
+        guard ink != self.ink else { return }
+        self.ink = ink
     }
 
     func start() {
