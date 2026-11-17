@@ -570,7 +570,7 @@ final class GridBackModel: ObservableObject {
     }
 
     private func announceQuit(_ note: String) {
-        let element: Any = NSApp.keyWindow ?? NSApp
+        let element: Any = NSApp.keyWindow ?? NSApp!
         NSAccessibility.post(
             element: element,
             notification: .announcementRequested,
