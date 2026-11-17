@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
         NSApp.setActivationPolicy(.accessory)
         // Login and a normal launch stay in the menu bar. The grid opens only from the menu or the shortcut.
         log.info("Launch policy before=\(policyBefore.rawValue, privacy: .public) after=\(NSApp.activationPolicy().rawValue, privacy: .public)")
+        MainMenu.install()
         model.delegate = self
         overlay.attach(model: model)
         let menu = MenuBarController(model: model)
@@ -61,6 +62,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
                 return nil
             }
             let modifiers = KeyModifiers(eventFlags: event.modifierFlags)
+            if self.model.takeQuitChord(
+                keyCode: event.keyCode,
+                modifiers: modifiers,
+                at: event.timestamp,
+                windowIsKey: NSApp.keyWindow != nil,
+                isRepeat: event.isARepeat
+            ) {
+                return nil
+            }
             let characters = event.characters ?? ""
             if self.searchFieldIsEditing {
                 let action = SearchKeyRouting.action(

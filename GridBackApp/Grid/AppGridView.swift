@@ -219,12 +219,64 @@ private struct SearchPillField: NSViewRepresentable {
             self.isFocused = isFocused
         }
 
+        /// Undo and redo post this as well, so the query follows the field.
         func controlTextDidChange(_ notification: Notification) {
             guard !isUpdatingFromModel, let field = notification.object as? NSTextField else { return }
-            if text.wrappedValue != field.stringValue {
-                text.wrappedValue = field.stringValue
+            let cleaned = SearchQueryText.cleaned(field.stringValue)
+            if cleaned != field.stringValue {
+                write(cleaned, into: field)
+            }
+            if text.wrappedValue != cleaned {
+                text.wrappedValue = cleaned
             }
             (field as? SearchPillTextField)?.paintCaret()
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            shouldChangeTextIn range: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            guard !isUpdatingFromModel, let replacementString else { return true }
+            let current = textView.string as NSString
+            guard range.location != NSNotFound, NSMaxRange(range) <= current.length else { return true }
+            let proposed = current.replacingCharacters(in: range, with: replacementString)
+            let cleaned = SearchQueryText.cleaned(proposed)
+            guard cleaned != proposed else { return true }
+
+            let fragment = SearchQueryText.cleaned(replacementString)
+            let fragmentFits = current.replacingCharacters(in: range, with: fragment) == cleaned
+            let expected = textView.string
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, textView.string == expected else { return }
+                if fragmentFits {
+                    textView.insertText(fragment, replacementRange: range)
+                    return
+                }
+                let whole = NSRange(location: 0, length: (textView.string as NSString).length)
+                guard textView.shouldChangeText(in: whole, replacementString: cleaned) else { return }
+                textView.replaceCharacters(in: whole, with: cleaned)
+                textView.didChangeText()
+                textView.setSelectedRange(NSRange(location: (cleaned as NSString).length, length: 0))
+            }
+            return false
+        }
+
+        /// A change that skipped `shouldChangeTextIn` still has to land as one short line.
+        /// Undo registration stays off so this rewrite is not a second undo step.
+        private func write(_ cleaned: String, into field: NSTextField) {
+            isUpdatingFromModel = true
+            defer { isUpdatingFromModel = false }
+            guard let editor = field.currentEditor() else {
+                field.stringValue = cleaned
+                return
+            }
+            let undo = editor.undoManager
+            undo?.disableUndoRegistration()
+            editor.string = cleaned
+            editor.selectedRange = NSRange(location: (cleaned as NSString).length, length: 0)
+            undo?.enableUndoRegistration()
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
