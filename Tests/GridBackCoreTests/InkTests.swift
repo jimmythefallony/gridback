@@ -54,6 +54,104 @@ final class InkTests: XCTestCase {
         XCTAssertEqual(ink.windowAppearance, .aqua)
     }
 
+    func testNeutralFillChoosesInkFromLuminanceAndPicturesStayLight() {
+        let pale = WallpaperNeutralFill.color(for: .light)
+        let charcoal = WallpaperNeutralFill.color(for: .dark)
+        XCTAssertGreaterThanOrEqual(InkContrast.relativeLuminance(pale), InkContrast.darkInkLuminance)
+        XCTAssertLessThanOrEqual(InkContrast.relativeLuminance(charcoal), InkContrast.lightInkLuminance)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(pale), previous: .light), .dark)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(pale), previous: .dark), .dark)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(charcoal), previous: .light), .light)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(charcoal), previous: .dark), .light)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(pale), previous: .dark).windowAppearance, .aqua)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(charcoal), previous: .dark).windowAppearance, .darkAqua)
+        XCTAssertEqual(Ink.forBackdrop(.picture, previous: .dark), .light)
+        XCTAssertEqual(Ink.forBackdrop(.picture, previous: .light), .light)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor, previous: .dark), .light)
+        XCTAssertEqual(BackdropInkSource.resolve(hasPicture: true, isSolidColor: true, fill: pale), .picture)
+        XCTAssertEqual(BackdropInkSource.resolve(hasPicture: false, isSolidColor: true, fill: pale), .solidColor)
+        XCTAssertEqual(BackdropInkSource.resolve(hasPicture: false, isSolidColor: false, fill: pale), .neutralFill(pale))
+    }
+
+    func testLuminanceChoiceKeepsThePreviousInkInsideTheGap() {
+        XCTAssertLessThan(InkContrast.lightInkLuminance, InkContrast.darkInkLuminance)
+        let low = InkContrast.lightInkLuminance
+        let high = InkContrast.darkInkLuminance
+        XCTAssertEqual(Ink.forLuminance(high, previous: .light), .dark)
+        XCTAssertEqual(Ink.forLuminance(high - 0.001, previous: .light), .light)
+        XCTAssertEqual(Ink.forLuminance(high - 0.001, previous: .dark), .dark)
+        XCTAssertEqual(Ink.forLuminance(low, previous: .dark), .light)
+        XCTAssertEqual(Ink.forLuminance(low + 0.001, previous: .dark), .dark)
+        XCTAssertEqual(Ink.forLuminance(low + 0.001, previous: .light), .light)
+
+        let between = (low + high) / 2
+        var ink = Ink.light
+        ink = Ink.forLuminance(between, previous: ink)
+        XCTAssertEqual(ink, .light)
+        ink = Ink.forLuminance(high, previous: ink)
+        XCTAssertEqual(ink, .dark)
+        ink = Ink.forLuminance(between, previous: ink)
+        XCTAssertEqual(ink, .dark)
+        ink = Ink.forLuminance(low, previous: ink)
+        XCTAssertEqual(ink, .light)
+
+        let mid = WallpaperSolidColor(red: 0.5, green: 0.5, blue: 0.5)
+        let midLuminance = InkContrast.relativeLuminance(mid)
+        XCTAssertGreaterThan(midLuminance, InkContrast.lightInkLuminance)
+        XCTAssertLessThan(midLuminance, InkContrast.darkInkLuminance)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(mid), previous: .light), .light)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(mid), previous: .dark), .dark)
+    }
+
+    func testFallbackInkMeetsContrastOnTheFillAndUnderTheVeil() {
+        XCTAssertEqual(InkContrast.relativeLuminance(red: 0, green: 0, blue: 0), 0, accuracy: 0.000_000_1)
+        XCTAssertEqual(InkContrast.relativeLuminance(red: 1, green: 1, blue: 1), 1, accuracy: 0.000_000_1)
+        XCTAssertEqual(InkContrast.contrastRatio(1, against: 0), 21, accuracy: 0.000_000_1)
+        let half = InkContrast.composite(.white(opacity: 0.5), over: WallpaperSolidColor(red: 0, green: 0, blue: 0))
+        XCTAssertEqual(half.red, 0.5, accuracy: 0.000_000_1)
+        XCTAssertEqual(half.green, 0.5, accuracy: 0.000_000_1)
+        XCTAssertEqual(half.blue, 0.5, accuracy: 0.000_000_1)
+
+        assertReadable(Ink.dark, on: WallpaperNeutralFill.color(for: .light))
+        assertReadable(Ink.light, on: WallpaperNeutralFill.color(for: .dark))
+    }
+
+    func testInkCrossfadeLastsAQuarterSecond() {
+        XCTAssertEqual(InkCrossfade.duration, 0.25, accuracy: 0.000_000_1)
+    }
+
+    private func assertReadable(_ ink: Ink, on fill: WallpaperSolidColor, file: StaticString = #filePath, line: UInt = #line) {
+        let keep = 1 - WallpaperDim.black
+        let veiled = WallpaperSolidColor(red: fill.red * keep, green: fill.green * keep, blue: fill.blue * keep)
+        for surface in [fill, veiled] {
+            let label = InkContrast.contrastRatio(
+                InkContrast.relativeLuminance(ink.label),
+                against: InkContrast.relativeLuminance(surface)
+            )
+            XCTAssertGreaterThanOrEqual(label, InkContrast.textMinimum, file: file, line: line)
+            let quiet = InkContrast.composite(ink.quiet, over: surface)
+            let quietRatio = InkContrast.contrastRatio(
+                InkContrast.relativeLuminance(quiet),
+                against: InkContrast.relativeLuminance(surface)
+            )
+            XCTAssertGreaterThanOrEqual(quietRatio, InkContrast.textMinimum, file: file, line: line)
+            let parts = [
+                ink.searchPlaceholder,
+                ink.pageDot(distance: 0),
+                ink.pageArrow(enabled: true),
+                ink.dropRing
+            ]
+            for part in parts {
+                let drawn = InkContrast.composite(part, over: surface)
+                let ratio = InkContrast.contrastRatio(
+                    InkContrast.relativeLuminance(drawn),
+                    against: InkContrast.relativeLuminance(surface)
+                )
+                XCTAssertGreaterThanOrEqual(ratio, InkContrast.graphicMinimum, file: file, line: line)
+            }
+        }
+    }
+
     func testDarkInkHighlightsAreTheSameStrengthButDarker() {
         let dark = Ink.dark
         let light = Ink.light

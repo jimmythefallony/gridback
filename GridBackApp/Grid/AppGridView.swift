@@ -1,5 +1,6 @@
 import AppKit
 import GridBackCore
+import QuartzCore
 import SwiftUI
 
 struct AppGridView: View {
@@ -244,6 +245,11 @@ private final class SearchPillTextField: NSTextField {
     static let font = NSFont.systemFont(ofSize: 16, weight: .medium)
 
     private var caretNSColor: NSColor?
+    private var appliedInk: Ink?
+    private var shownText: NSColor?
+    private var shownCaret: NSColor?
+    private var shownPlaceholder: NSColor?
+    private var inkTimer: Timer?
 
     static func placeholder(_ color: NSColor) -> NSAttributedString {
         NSAttributedString(
@@ -257,10 +263,21 @@ private final class SearchPillTextField: NSTextField {
 
     override var allowsVibrancy: Bool { false }
 
+    deinit {
+        inkTimer?.invalidate()
+    }
+
     func apply(_ ink: Ink) {
-        textColor = ink.searchText.nsColor
-        caretNSColor = ink.searchCaret.nsColor
-        placeholderAttributedString = Self.placeholder(ink.searchPlaceholder.nsColor)
+        if ink != appliedInk {
+            let previous = appliedInk
+            appliedInk = ink
+            if let previous, shouldAnimateInk {
+                startInkAnimation(from: previous, to: ink)
+            } else {
+                stopInkAnimation()
+                show(ink)
+            }
+        }
         paintCaret()
     }
 
@@ -271,9 +288,126 @@ private final class SearchPillTextField: NSTextField {
         return accepted
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // The window appearance flips with the ink. Re-apply the colours we
+        // paint so the field does not pick up the system label colour for a frame.
+        reapplyShownColors()
+        DispatchQueue.main.async { [weak self] in self?.reapplyShownColors() }
+    }
+
     func paintCaret() {
         guard let editor = currentEditor() as? NSTextView, let caretNSColor else { return }
         editor.insertionPointColor = caretNSColor
         editor.textColor = textColor
+        guard let textColor else { return }
+        var attributes = editor.selectedTextAttributes
+        attributes[.foregroundColor] = textColor
+        editor.selectedTextAttributes = attributes
+    }
+
+    private var shouldAnimateInk: Bool {
+        window?.isVisible == true && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    private func show(_ ink: Ink) {
+        applyShown(
+            text: ink.searchText.nsColor,
+            caret: ink.searchCaret.nsColor,
+            placeholder: ink.searchPlaceholder.nsColor
+        )
+    }
+
+    private func applyShown(text: NSColor, caret: NSColor, placeholder: NSColor) {
+        shownText = text
+        shownCaret = caret
+        shownPlaceholder = placeholder
+        textColor = text
+        caretNSColor = caret
+        placeholderAttributedString = Self.placeholder(placeholder)
+        paintCaret()
+    }
+
+    private func reapplyShownColors() {
+        guard let shownText, let shownCaret, let shownPlaceholder else { return }
+        textColor = shownText
+        caretNSColor = shownCaret
+        placeholderAttributedString = Self.placeholder(shownPlaceholder)
+        paintCaret()
+    }
+
+    private func stopInkAnimation() {
+        inkTimer?.invalidate()
+        inkTimer = nil
+    }
+
+    /// Moves the field's own colours with the backdrop crossfade. The field is
+    /// not a SwiftUI colour, so it would otherwise jump to the new ink at once.
+    private func startInkAnimation(from: Ink, to: Ink) {
+        let startText = shownText ?? from.searchText.nsColor
+        let startCaret = shownCaret ?? from.searchCaret.nsColor
+        let startPlaceholder = shownPlaceholder ?? from.searchPlaceholder.nsColor
+        let endText = to.searchText.nsColor
+        let endCaret = to.searchCaret.nsColor
+        let endPlaceholder = to.searchPlaceholder.nsColor
+        let started = CACurrentMediaTime()
+        stopInkAnimation()
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            let raw = min(1, (CACurrentMediaTime() - started) / InkCrossfade.duration)
+            let t = Self.easeInOut(raw)
+            self.applyShown(
+                text: Self.mix(startText, endText, t),
+                caret: Self.mix(startCaret, endCaret, t),
+                placeholder: Self.mix(startPlaceholder, endPlaceholder, t)
+            )
+            if raw >= 1 {
+                timer.invalidate()
+                if let current = self.inkTimer, current === timer {
+                    self.inkTimer = nil
+                }
+            }
+        }
+        inkTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Same curve as the backdrop dissolve (`easeInEaseOut`: 0.42, 0, 0.58, 1).
+    private static func easeInOut(_ x: Double) -> CGFloat {
+        let target = min(max(x, 0), 1)
+        var lo = 0.0
+        var hi = 1.0
+        var t = target
+        for _ in 0..<16 {
+            let sample = unitBezier(t, 0.42, 0.58)
+            if abs(sample - target) < 0.000_1 { break }
+            if sample < target {
+                lo = t
+            } else {
+                hi = t
+            }
+            t = (lo + hi) / 2
+        }
+        return CGFloat(unitBezier(t, 0, 1))
+    }
+
+    private static func unitBezier(_ t: Double, _ p1: Double, _ p2: Double) -> Double {
+        let u = 1 - t
+        return (3 * u * u * t * p1) + (3 * u * t * t * p2) + (t * t * t)
+    }
+
+    private static func mix(_ from: NSColor, _ to: NSColor, _ amount: CGFloat) -> NSColor {
+        guard let start = from.usingColorSpace(.sRGB), let end = to.usingColorSpace(.sRGB) else {
+            return amount >= 1 ? to : from
+        }
+        return NSColor(
+            srgbRed: start.redComponent + (end.redComponent - start.redComponent) * amount,
+            green: start.greenComponent + (end.greenComponent - start.greenComponent) * amount,
+            blue: start.blueComponent + (end.blueComponent - start.blueComponent) * amount,
+            alpha: start.alphaComponent + (end.alphaComponent - start.alphaComponent) * amount
+        )
     }
 }

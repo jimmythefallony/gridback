@@ -1,12 +1,39 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Foreground ink for the grid.
 ///
-/// Light ink is the white-on-dark look the app draws today.
-/// Dark ink is the near-black set for a light backdrop. The app does not select it yet.
+/// Light ink is the white-on-dark look. Dark ink is the near-black set for the pale neutral fill.
 public enum Ink: Equatable, Sendable {
     case light
     case dark
+
+    /// Pictures and solid colours stay light. The neutral fill follows its luminance.
+    /// Two thresholds leave a gap: inside the gap the previous ink stays, so a fill
+    /// that jitters near one boundary cannot flip back and forth.
+    public static func forBackdrop(_ source: BackdropInkSource, previous: Ink) -> Ink {
+        switch source {
+        case .picture, .solidColor:
+            return .light
+        case .neutralFill(let fill):
+            return forLuminance(InkContrast.relativeLuminance(fill), previous: previous)
+        }
+    }
+
+    /// Light ink at or below the low threshold, dark ink at or above the high one, previous ink between them.
+    public static func forLuminance(_ luminance: Double, previous: Ink) -> Ink {
+        if luminance >= InkContrast.darkInkLuminance {
+            return .dark
+        }
+        if luminance <= InkContrast.lightInkLuminance {
+            return .light
+        }
+        return previous
+    }
 
     public var label: InkColor { swatch.opacity(1) }
 
@@ -170,4 +197,72 @@ public struct InkShadow: Equatable, Sendable {
 public enum InkWindowAppearance: Equatable, Sendable {
     case darkAqua
     case aqua
+}
+
+/// What is behind the grid, for choosing ink.
+/// `picture` is a matched frame (a still, or an Aerial frame when one is shown).
+public enum BackdropInkSource: Equatable, Sendable {
+    case picture
+    case solidColor
+    case neutralFill(WallpaperSolidColor)
+
+    /// A real picture wins. A solid colour is next. Anything else is the neutral fill.
+    public static func resolve(hasPicture: Bool, isSolidColor: Bool, fill: WallpaperSolidColor) -> BackdropInkSource {
+        if hasPicture { return .picture }
+        if isSolidColor { return .solidColor }
+        return .neutralFill(fill)
+    }
+}
+
+/// WCAG 2 relative luminance and contrast. Translucent ink is composited over the fill first.
+public enum InkContrast {
+    public static let textMinimum = 4.5
+    public static let graphicMinimum = 3.0
+    /// At or below this, the fill takes light ink. White text is clearly the readable one here.
+    public static let lightInkLuminance = 0.15
+    /// At or above this, the fill takes dark ink. Dark text is clearly the readable one here.
+    public static let darkInkLuminance = 0.30
+
+    public static func relativeLuminance(red: Double, green: Double, blue: Double) -> Double {
+        0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
+    public static func relativeLuminance(_ color: InkColor) -> Double {
+        relativeLuminance(red: color.red, green: color.green, blue: color.blue)
+    }
+
+    public static func relativeLuminance(_ color: WallpaperSolidColor) -> Double {
+        relativeLuminance(red: color.red, green: color.green, blue: color.blue)
+    }
+
+    public static func contrastRatio(_ foreground: Double, against background: Double) -> Double {
+        let lighter = max(foreground, background)
+        let darker = min(foreground, background)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// Source-over of a translucent ink on an opaque fill. The result is opaque.
+    public static func composite(_ foreground: InkColor, over background: WallpaperSolidColor) -> InkColor {
+        let alpha = min(max(foreground.opacity, 0), 1)
+        return .srgb(
+            red: foreground.red * alpha + background.red * (1 - alpha),
+            green: foreground.green * alpha + background.green * (1 - alpha),
+            blue: foreground.blue * alpha + background.blue * (1 - alpha),
+            opacity: 1
+        )
+    }
+
+    /// WCAG 2 sRGB channel. The split is the one written in the contrast definition.
+    private static func linear(_ channel: Double) -> Double {
+        let value = min(max(channel, 0), 1)
+        if value <= 0.03928 {
+            return value / 12.92
+        }
+        return pow((value + 0.055) / 1.055, 2.4)
+    }
+}
+
+/// How long the backdrop and the ink take to move together while the grid is open.
+public enum InkCrossfade {
+    public static let duration = 0.25
 }

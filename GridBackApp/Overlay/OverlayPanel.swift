@@ -1,5 +1,6 @@
 import AppKit
 import GridBackCore
+import QuartzCore
 
 /// Borderless panel for the interactive grid. It joins existing Spaces, including
 /// a full-screen app's Space, and does not become a full-screen Space of its own
@@ -44,9 +45,13 @@ final class OverlayPanel: NSPanel {
         titlebarAppearsTransparent = true
         title = "GridBack"
         identifier = NSUserInterfaceItemIdentifier("GridBackOverlay")
-        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
         ignoresMouseEvents = false
         BackdropSurface.prepare(imageView: backdropView, in: self)
+        apply(ink: ink)
+    }
+
+    func apply(ink: Ink) {
+        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
     }
 
     override var canBecomeKey: Bool { true }
@@ -91,9 +96,13 @@ final class DockBackdropPanel: NSPanel {
         titlebarAppearsTransparent = true
         title = "GridBack Dock Backdrop"
         identifier = NSUserInterfaceItemIdentifier("GridBackDockBackdrop")
-        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
         ignoresMouseEvents = true
         BackdropSurface.prepare(imageView: backdropView, in: self)
+        apply(ink: ink)
+    }
+
+    func apply(ink: Ink) {
+        appearance = NSAppearance(named: ink.windowAppearance.nsAppearanceName)
     }
 
     override var canBecomeKey: Bool { false }
@@ -101,27 +110,95 @@ final class DockBackdropPanel: NSPanel {
 }
 
 enum BackdropSurface {
+    private static let fadeID = NSUserInterfaceItemIdentifier("GridBackBackdropFade")
+
     static func prepare(imageView: NSImageView, in window: NSWindow) {
-        imageView.imageScaling = .scaleAxesIndependently
-        imageView.imageAlignment = .alignCenter
-        imageView.imageFrameStyle = .none
-        imageView.wantsLayer = true
-        imageView.layer?.backgroundColor = NSColor.clear.cgColor
+        configure(imageView)
+        let fade = NSImageView(frame: imageView.frame)
+        configure(fade)
+        fade.identifier = fadeID
+        fade.alphaValue = 0
         let container = NSView(frame: window.contentView?.bounds ?? .zero)
         container.autoresizingMask = [.width, .height]
         container.clipsToBounds = true
         container.addSubview(imageView)
+        container.addSubview(fade)
         window.contentView = container
     }
 
     /// Places the one shared picture in `window`'s coordinates. Both windows
     /// show this same image, so the grid and the Dock band stay aligned.
     /// Reduce Transparency does not change it: there is no live desktop sample.
-    static func show(image: NSImage, placement: NSRect, imageView: NSImageView, window: NSWindow) {
+    /// `crossfade` dissolves the new picture over the one already on screen.
+    static func show(image: NSImage, placement: NSRect, imageView: NSImageView, window: NSWindow, crossfade: Bool) {
         imageView.isHidden = false
-        imageView.frame = placement
-        imageView.image = image
         window.isOpaque = true
         window.backgroundColor = .black
+        let fadeView = fadeView(pairedWith: imageView)
+        if crossfade, let fading = fadeView.image, fading === image, fadeView.alphaValue > 0 {
+            imageView.frame = placement
+            fadeView.frame = placement
+            return
+        }
+        let token = fadeView.tag + 1
+        fadeView.tag = token
+        let sameImage = imageView.image.map { $0 === image } ?? false
+        let animate = crossfade && imageView.image != nil && !sameImage
+        guard animate else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fadeView.alphaValue = 0
+            fadeView.image = nil
+            imageView.alphaValue = 1
+            imageView.frame = placement
+            imageView.image = image
+            CATransaction.commit()
+            return
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if fadeView.alphaValue > 0, let current = fadeView.image {
+            imageView.image = current
+        }
+        imageView.frame = placement
+        fadeView.frame = placement
+        fadeView.alphaValue = 0
+        fadeView.image = image
+        CATransaction.commit()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = InkCrossfade.duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            fadeView.animator().alphaValue = 1
+        } completionHandler: { [weak imageView, weak fadeView] in
+            guard let imageView, let fadeView, fadeView.tag == token else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageView.image = image
+            fadeView.alphaValue = 0
+            fadeView.image = nil
+            CATransaction.commit()
+        }
+    }
+
+    private static func configure(_ imageView: NSImageView) {
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageAlignment = .alignCenter
+        imageView.imageFrameStyle = .none
+        imageView.wantsLayer = true
+        imageView.layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    private static func fadeView(pairedWith imageView: NSImageView) -> NSImageView {
+        if let existing = imageView.superview?.subviews.compactMap({ $0 as? NSImageView }).first(where: {
+            $0 !== imageView && $0.identifier == fadeID
+        }) {
+            return existing
+        }
+        let fade = NSImageView(frame: imageView.frame)
+        configure(fade)
+        fade.identifier = fadeID
+        fade.alphaValue = 0
+        imageView.superview?.addSubview(fade, positioned: .above, relativeTo: imageView)
+        return fade
     }
 }

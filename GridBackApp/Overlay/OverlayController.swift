@@ -256,9 +256,9 @@ final class OverlayController: NSObject {
         appliedOcclusion = occlusion
     }
 
-    /// The grid window follows the ink (dark Aqua while ink is light), so its
-    /// appearance is not the system's. Light and Dark wallpapers follow NSApp.
-    /// A change pre-warms the other frame.
+    /// The grid window follows the ink, not the system appearance. Light and Dark
+    /// wallpapers follow NSApp. A change pre-warms the other frame, and an open
+    /// grid crossfades onto it.
     private func watchSystemAppearance() {
         guard appearanceObservation == nil else { return }
         lastSystemAppearance = DesktopPicture.systemAppearance()
@@ -435,7 +435,30 @@ final class OverlayController: NSObject {
     }
 
     private func applyPicture(_ image: NSImage, job: DesktopPictureJob) {
-        guard let panel, let backdrop = dockBackdrop else { return }
+        guard let panel, let backdrop = dockBackdrop, let model else { return }
+        let fill = job.solidColor ?? WallpaperNeutralFill.color(for: job.appearance)
+        let source = BackdropInkSource.resolve(
+            hasPicture: job.url != nil,
+            isSolidColor: job.kind == .solidColor,
+            fill: fill
+        )
+        let ink = Ink.forBackdrop(source, previous: model.ink)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animate = panel.isVisible && !reduceMotion
+        if ink != model.ink {
+            log.info("Ink \(String(describing: ink), privacy: .public) kind=\(job.kind.rawValue, privacy: .public)")
+        }
+        var transaction = Transaction()
+        if animate {
+            transaction.animation = .easeInOut(duration: InkCrossfade.duration)
+        } else {
+            transaction.disablesAnimations = true
+        }
+        withTransaction(transaction) {
+            model.setInk(ink)
+        }
+        panel.apply(ink: ink)
+        backdrop.apply(ink: ink)
         let screenRect = PlacedRect(x: job.screenX, y: job.screenY, width: job.screenWidth, height: job.screenHeight)
         let gridRect = PlacedRect(x: panel.frame.minX, y: panel.frame.minY, width: panel.frame.width, height: panel.frame.height)
         let backdropRect = PlacedRect(x: backdrop.frame.minX, y: backdrop.frame.minY, width: backdrop.frame.width, height: backdrop.frame.height)
@@ -445,13 +468,15 @@ final class OverlayController: NSObject {
             image: image,
             placement: NSRect(x: gridPlacement.x, y: gridPlacement.y, width: gridPlacement.width, height: gridPlacement.height),
             imageView: panel.backdropView,
-            window: panel
+            window: panel,
+            crossfade: animate
         )
         BackdropSurface.show(
             image: image,
             placement: NSRect(x: fullPlacement.x, y: fullPlacement.y, width: fullPlacement.width, height: fullPlacement.height),
             imageView: backdrop.backdropView,
-            window: backdrop
+            window: backdrop,
+            crossfade: animate
         )
     }
 
