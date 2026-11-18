@@ -6,7 +6,7 @@
 
 GridBack is a free menu-bar app for Mac. It opens a full-screen grid of your apps, so you can see them, keep them in the order you like, and click one to open it.
 
-This is version 0.3.6. It is open source, and it is not a finished product.
+This is version 0.3.7. It is open source, and it is not a finished product.
 
 ## Privacy
 
@@ -25,9 +25,10 @@ No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 These were checked on a real Mac running macOS 27, built with Xcode 27.2.
 
 - A grid icon sits in the menu bar. Click it for **Open GridBack**, **Settings…**, and **Quit GridBack**.
+- To quit, press Command-Q twice, or choose **Quit GridBack** from the menu-bar icon.
 - The shortcut is **Control-Option-G**. It works while another app is in front. The same shortcut closes the grid. You can change it in Settings.
 - Settings has **Start GridBack at login**. It is off until you turn it on. When you log in, GridBack stays in the menu bar and does not open the grid.
-- Type to search for an app. Search also finds an app that is inside a folder, and clicking the result opens that app.
+- Type to search for an app. Search also finds an app that is inside a folder, and clicking the result opens that app. Command-A, C, V, X and Z work in the search field.
 - Escape clears the search. If a folder is open, the next Escape closes the folder. One more Escape closes the grid.
 - Click an app to open it.
 - Drag apps to rearrange them. The new order is still there after you quit and open GridBack again.
@@ -49,8 +50,8 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 
 ## Known issues
 
-- Wallpapers your account isn't allowed to read show a plain dark background.
-- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive or external drives show a plain dark background, because GridBack never asks for extra permissions.
+- Wallpapers your account isn't allowed to read show a plain fallback that follows Light/Dark mode.
+- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive or external drives show a plain fallback that follows Light/Dark mode, because GridBack never asks for extra permissions.
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
 
@@ -82,7 +83,7 @@ Uninstalling does not turn off Start at login. Remove GridBack in **System Setti
 
 ### Download the zip
 
-1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.6.zip**.
+1. Open the [GitHub Releases](https://github.com/jimmythefallony/gridback/releases) page for this project and download **GridBack-v0.3.7.zip**.
 2. Unzip it.
 3. Move **GridBack.app** into your Applications folder.
 
