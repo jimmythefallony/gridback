@@ -24,14 +24,14 @@ final class InkTests: XCTestCase {
         XCTAssertEqual(ink.folderFill(armed: true), .white(opacity: 0.28))
         XCTAssertEqual(ink.folderStroke(armed: false), .white(opacity: 0.28))
         XCTAssertEqual(ink.folderStroke(armed: true), .white(opacity: 0.95))
-        XCTAssertEqual(ink.searchPill, .white(opacity: 0.16))
+        XCTAssertEqual(ink.searchPill, .black(opacity: Ink.lightSearchScrim))
         XCTAssertEqual(ink.searchText, .white(opacity: 1))
         XCTAssertEqual(ink.searchPlaceholder, .white(opacity: 0.65))
         XCTAssertEqual(ink.searchCaret, .white(opacity: 1))
         XCTAssertEqual(ink.pageArrow(enabled: true), .white(opacity: 0.9))
         XCTAssertEqual(ink.pageArrow(enabled: false), .white(opacity: 0.28))
-        XCTAssertEqual(ink.pageDot(distance: 0), .white(opacity: 0.95))
-        XCTAssertEqual(ink.pageDot(distance: 1).opacity, 0.95 - 0.62, accuracy: 0.000_000_1)
+        XCTAssertEqual(ink.pageDot(distance: 0), .white(opacity: Ink.pageDotCurrentOpacity))
+        XCTAssertEqual(ink.pageDot(distance: 1).opacity, Ink.pageDotInactiveOpacity, accuracy: 0.000_000_1)
         XCTAssertEqual(ink.pageDot(distance: 1).red, 1)
         XCTAssertEqual(ink.folderPanelFill, .white(opacity: 0.24))
         XCTAssertEqual(ink.folderPanelStroke, .white(opacity: 0.45))
@@ -50,7 +50,9 @@ final class InkTests: XCTestCase {
         XCTAssertEqual(ink.searchText.green, ink.label.green)
         XCTAssertEqual(ink.searchText.blue, ink.label.blue)
         XCTAssertEqual(ink.searchCaret, ink.label)
-        XCTAssertEqual(ink.searchPlaceholder.opacity, 0.65)
+        XCTAssertEqual(ink.muted.opacity, Ink.darkMutedOpacity)
+        XCTAssertEqual(ink.searchPlaceholder.opacity, Ink.darkMutedOpacity)
+        XCTAssertEqual(ink.searchPill, .white(opacity: Ink.darkSearchScrim))
         XCTAssertEqual(ink.windowAppearance, .aqua)
     }
 
@@ -67,9 +69,10 @@ final class InkTests: XCTestCase {
         XCTAssertEqual(Ink.forBackdrop(.neutralFill(charcoal), previous: .dark).windowAppearance, .darkAqua)
         XCTAssertEqual(Ink.forBackdrop(.picture, previous: .dark), .light)
         XCTAssertEqual(Ink.forBackdrop(.picture, previous: .light), .light)
-        XCTAssertEqual(Ink.forBackdrop(.solidColor, previous: .dark), .light)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(charcoal), previous: .dark), .light)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(pale), previous: .light), .dark)
         XCTAssertEqual(BackdropInkSource.resolve(hasPicture: true, isSolidColor: true, fill: pale), .picture)
-        XCTAssertEqual(BackdropInkSource.resolve(hasPicture: false, isSolidColor: true, fill: pale), .solidColor)
+        XCTAssertEqual(BackdropInkSource.resolve(hasPicture: false, isSolidColor: true, fill: pale), .solidColor(pale))
         XCTAssertEqual(BackdropInkSource.resolve(hasPicture: false, isSolidColor: false, fill: pale), .neutralFill(pale))
     }
 
@@ -100,7 +103,7 @@ final class InkTests: XCTestCase {
         XCTAssertGreaterThan(midLuminance, InkContrast.lightInkLuminance)
         XCTAssertLessThan(midLuminance, InkContrast.darkInkLuminance)
         XCTAssertEqual(Ink.forBackdrop(.neutralFill(mid), previous: .light), .light)
-        XCTAssertEqual(Ink.forBackdrop(.neutralFill(mid), previous: .dark), .dark)
+        XCTAssertEqual(Ink.forBackdrop(.neutralFill(mid), previous: .dark), .light)
     }
 
     func testFallbackInkMeetsContrastOnTheFillAndUnderTheVeil() {
@@ -164,7 +167,6 @@ final class InkTests: XCTestCase {
             (dark.folderFill(armed: false), light.folderFill(armed: false)),
             (dark.folderFill(armed: true), light.folderFill(armed: true)),
             (dark.folderStroke(armed: true), light.folderStroke(armed: true)),
-            (dark.searchPill, light.searchPill),
             (dark.pageDot(distance: 0), light.pageDot(distance: 0)),
             (dark.pageArrow(enabled: true), light.pageArrow(enabled: true)),
             (dark.pageArrow(enabled: false), light.pageArrow(enabled: false))
@@ -176,5 +178,280 @@ final class InkTests: XCTestCase {
             XCTAssertEqual(darkColor.blue, dark.label.blue)
             XCTAssertLessThan(darkColor.red, lightColor.red)
         }
+    }
+
+    func testShownColourIsTheFillTimesTheOpenVeil() {
+        let fill = WallpaperSolidColor(red: 0.2, green: 0.4, blue: 0.8)
+        let shown = InkContrast.shown(fill, veil: 0.25)
+        XCTAssertEqual(shown.red, 0.2 * 0.75, accuracy: 0.000_000_1)
+        XCTAssertEqual(shown.green, 0.4 * 0.75, accuracy: 0.000_000_1)
+        XCTAssertEqual(shown.blue, 0.8 * 0.75, accuracy: 0.000_000_1)
+        let normal = InkContrast.shown(fill)
+        XCTAssertEqual(normal.red, fill.red * (1 - WallpaperDim.black), accuracy: 0.000_000_1)
+        XCTAssertEqual(normal.green, fill.green * (1 - WallpaperDim.black), accuracy: 0.000_000_1)
+        XCTAssertEqual(normal.blue, fill.blue * (1 - WallpaperDim.black), accuracy: 0.000_000_1)
+        let open = InkContrast.shown(fill, veil: 0)
+        XCTAssertEqual(open.red, fill.red, accuracy: 0.000_000_1)
+        XCTAssertEqual(open.green, fill.green, accuracy: 0.000_000_1)
+        XCTAssertEqual(open.blue, fill.blue, accuracy: 0.000_000_1)
+    }
+
+    func testLabelContrastsCrossNearAShownLuminanceOf0206() {
+        var low = 0.0
+        var high = 1.0
+        for _ in 0..<40 {
+            let mid = (low + high) / 2
+            let surface = WallpaperSolidColor(red: mid, green: mid, blue: mid)
+            let light = contrast(Ink.light.label, on: surface)
+            let dark = contrast(Ink.dark.label, on: surface)
+            if light > dark {
+                low = mid
+            } else {
+                high = mid
+            }
+        }
+        let crossed = (low + high) / 2
+        let surface = WallpaperSolidColor(red: crossed, green: crossed, blue: crossed)
+        let luminance = InkContrast.relativeLuminance(surface)
+        XCTAssertEqual(luminance, 0.206, accuracy: 0.002)
+        XCTAssertEqual(contrast(Ink.light.label, on: surface), contrast(Ink.dark.label, on: surface), accuracy: 0.01)
+        XCTAssertLessThan(contrast(Ink.light.label, on: surface), InkContrast.textMinimum)
+        XCTAssertLessThan(contrast(Ink.dark.label, on: surface), InkContrast.textMinimum)
+    }
+
+    func testPinnedFillsChooseInkAndVeilFromTheShownColour() {
+        let peach = InkContrast.forFill(rgb(0xFFCBA4))
+        XCTAssertEqual(peach.ink, .dark)
+        XCTAssertEqual(peach.veil, WallpaperDim.black)
+
+        let grey = InkContrast.forFill(rgb(0x808080))
+        XCTAssertEqual(grey.ink, .light)
+        XCTAssertEqual(grey.veil, WallpaperDim.black)
+
+        let pale = InkContrast.forFill(rgb(0xE6E8EB))
+        XCTAssertEqual(pale.ink, .dark)
+        XCTAssertEqual(pale.veil, WallpaperDim.black)
+
+        let charcoal = InkContrast.forFill(rgb(0x303238))
+        XCTAssertEqual(charcoal.ink, .light)
+        XCTAssertEqual(charcoal.veil, WallpaperDim.black)
+
+        let rose = InkContrast.forFill(rgb(0xC9A0A6))
+        XCTAssertEqual(rose.ink, .light)
+        XCTAssertGreaterThan(rose.veil, WallpaperDim.black)
+        XCTAssertEqual(rose.veil, 0.303, accuracy: 0.005)
+        let roseShown = InkContrast.shown(rgb(0xC9A0A6), veil: rose.veil)
+        let roseContrast = contrast(Ink.light.label, on: roseShown)
+        XCTAssertGreaterThanOrEqual(roseContrast, InkContrast.textMinimum)
+        XCTAssertLessThan(roseContrast, 4.55)
+
+        let sky = InkContrast.forFill(rgb(0x7DAAD1))
+        XCTAssertEqual(sky.ink, .light)
+        XCTAssertGreaterThan(sky.veil, WallpaperDim.black)
+        XCTAssertEqual(sky.veil, 0.281, accuracy: 0.005)
+        let skyShown = InkContrast.shown(rgb(0x7DAAD1), veil: sky.veil)
+        let skyContrast = contrast(Ink.light.label, on: skyShown)
+        XCTAssertGreaterThanOrEqual(skyContrast, InkContrast.textMinimum)
+        XCTAssertLessThan(skyContrast, 4.55)
+    }
+
+    func testFlatFillsIgnoreThePreviousInk() {
+        let fills = sweepFills()
+        for fill in fills {
+            let solidLight = Ink.forBackdrop(.solidColor(fill), previous: .light)
+            let solidDark = Ink.forBackdrop(.solidColor(fill), previous: .dark)
+            XCTAssertEqual(solidLight, solidDark)
+            let neutralLight = Ink.forBackdrop(.neutralFill(fill), previous: .light)
+            let neutralDark = Ink.forBackdrop(.neutralFill(fill), previous: .dark)
+            XCTAssertEqual(neutralLight, neutralDark)
+            XCTAssertEqual(solidLight, neutralLight)
+            XCTAssertEqual(InkContrast.forFill(fill).ink, solidLight)
+            let again = InkContrast.forFill(fill)
+            XCTAssertEqual(again.veil, InkContrast.forFill(fill).veil)
+            XCTAssertEqual(again.ink, InkContrast.forFill(fill).ink)
+        }
+        XCTAssertEqual(Ink.forBackdrop(.picture, previous: .dark), .light)
+        XCTAssertEqual(Ink.forBackdrop(.picture, previous: .light), .light)
+    }
+
+    func testSweepOfFillsMeetsLabelPlaceholderAndDotContrast() {
+        let fills = sweepFills()
+        XCTAssertGreaterThanOrEqual(fills.count, 500)
+        var worstLabel = 99.0
+        var worstPlaceholder = 99.0
+        var worstTyped = 99.0
+        var worstCaret = 99.0
+        var worstInactive = 99.0
+        var worstCurrent = 99.0
+        for fill in fills {
+            let choice = InkContrast.forFill(fill)
+            let surface = InkContrast.shown(fill, veil: choice.veil)
+            let ink = choice.ink
+            worstLabel = min(worstLabel, contrast(ink.label, on: surface))
+            let field = InkContrast.composite(ink.searchPill, over: surface)
+            let placeholder = InkContrast.composite(ink.searchPlaceholder, over: solid(field))
+            worstPlaceholder = min(worstPlaceholder, contrast(placeholder, on: field))
+            worstTyped = min(worstTyped, contrast(InkContrast.composite(ink.searchText, over: solid(field)), on: field))
+            worstCaret = min(worstCaret, contrast(InkContrast.composite(ink.searchCaret, over: solid(field)), on: field))
+            let inactive = InkContrast.composite(ink.pageDot(distance: 1), over: surface)
+            let current = InkContrast.composite(ink.pageDot(distance: 0), over: surface)
+            worstInactive = min(worstInactive, contrast(inactive, on: surface))
+            worstCurrent = min(worstCurrent, contrast(current, on: surface))
+            XCTAssertGreaterThan(ink.pageDot(distance: 0).opacity, ink.pageDot(distance: 1).opacity + 0.2)
+        }
+        XCTAssertGreaterThanOrEqual(worstLabel, InkContrast.textMinimum)
+        XCTAssertGreaterThanOrEqual(worstPlaceholder, InkContrast.textMinimum)
+        XCTAssertGreaterThanOrEqual(worstTyped, InkContrast.textMinimum)
+        XCTAssertGreaterThanOrEqual(worstCaret, InkContrast.textMinimum)
+        XCTAssertGreaterThanOrEqual(worstInactive, InkContrast.graphicMinimum)
+        XCTAssertGreaterThanOrEqual(worstCurrent, InkContrast.graphicMinimum)
+    }
+
+    func testSearchAndDotStrengthAreTheLowestHundredthsThatPass() {
+        let fills = sweepFills()
+        XCTAssertGreaterThanOrEqual(
+            minimumPlaceholder(fills, lightScrim: Ink.lightSearchScrim, darkScrim: Ink.darkSearchScrim, darkOpacity: Ink.darkMutedOpacity),
+            InkContrast.textMinimum
+        )
+        XCTAssertLessThan(
+            minimumPlaceholder(fills, lightScrim: Ink.lightSearchScrim - 0.01, darkScrim: Ink.darkSearchScrim, darkOpacity: Ink.darkMutedOpacity),
+            InkContrast.textMinimum
+        )
+        XCTAssertLessThan(
+            minimumPlaceholder(fills, lightScrim: Ink.lightSearchScrim, darkScrim: Ink.darkSearchScrim - 0.01, darkOpacity: Ink.darkMutedOpacity),
+            InkContrast.textMinimum
+        )
+        XCTAssertLessThan(
+            minimumPlaceholder(fills, lightScrim: Ink.lightSearchScrim, darkScrim: Ink.darkSearchScrim, darkOpacity: Ink.darkMutedOpacity - 0.01),
+            InkContrast.textMinimum
+        )
+        XCTAssertGreaterThanOrEqual(minimumDot(fills, opacity: Ink.pageDotInactiveOpacity), InkContrast.graphicMinimum)
+        XCTAssertLessThan(minimumDot(fills, opacity: Ink.pageDotInactiveOpacity - 0.01), InkContrast.graphicMinimum)
+        XCTAssertGreaterThanOrEqual(minimumDot(fills, opacity: Ink.pageDotCurrentOpacity), InkContrast.graphicMinimum)
+    }
+
+    private func rgb(_ hex: Int) -> WallpaperSolidColor {
+        WallpaperSolidColor(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255
+        )
+    }
+
+    private func solid(_ color: InkColor) -> WallpaperSolidColor {
+        WallpaperSolidColor(red: color.red, green: color.green, blue: color.blue)
+    }
+
+    private func contrast(_ foreground: InkColor, on background: WallpaperSolidColor) -> Double {
+        InkContrast.contrastRatio(
+            InkContrast.relativeLuminance(foreground),
+            against: InkContrast.relativeLuminance(background)
+        )
+    }
+
+    private func contrast(_ foreground: InkColor, on background: InkColor) -> Double {
+        InkContrast.contrastRatio(
+            InkContrast.relativeLuminance(foreground),
+            against: InkContrast.relativeLuminance(background)
+        )
+    }
+
+    /// Grey ramp, a hue wheel at several lightnesses, and the fills that sit
+    /// nearest the contrast boundary. About 500 colours.
+    private func sweepFills() -> [WallpaperSolidColor] {
+        var fills: [WallpaperSolidColor] = []
+        for step in 0...64 {
+            let channel = Double(step) / 64
+            fills.append(WallpaperSolidColor(red: channel, green: channel, blue: channel))
+        }
+        let lightnesses = [0.18, 0.30, 0.42, 0.50, 0.58, 0.68, 0.78, 0.90]
+        for lightness in lightnesses {
+            for saturation in [0.5, 1.0] {
+                for step in 0..<28 {
+                    fills.append(hsl(hue: Double(step) * (360.0 / 28.0), saturation: saturation, lightness: lightness))
+                }
+            }
+        }
+        fills.append(WallpaperSolidColor(red: 1, green: 0.3245, blue: 1))
+        fills.append(WallpaperSolidColor(red: 0, green: 0.8047, blue: 0))
+        fills.append(WallpaperSolidColor(red: 1, green: 0, blue: 0))
+        fills.append(WallpaperSolidColor(red: 0, green: 1, blue: 0))
+        fills.append(WallpaperSolidColor(red: 0, green: 0, blue: 1))
+        fills.append(WallpaperSolidColor(red: 1, green: 1, blue: 1))
+        fills.append(WallpaperSolidColor(red: 0, green: 0, blue: 0))
+        return fills
+    }
+
+    private func hsl(hue: Double, saturation: Double, lightness: Double) -> WallpaperSolidColor {
+        let chroma = (1 - abs(2 * lightness - 1)) * saturation
+        let sector = hue.truncatingRemainder(dividingBy: 360) / 60
+        let x = chroma * (1 - abs(sector.truncatingRemainder(dividingBy: 2) - 1))
+        let match = lightness - chroma / 2
+        let red: Double
+        let green: Double
+        let blue: Double
+        if sector < 1 {
+            red = chroma
+            green = x
+            blue = 0
+        } else if sector < 2 {
+            red = x
+            green = chroma
+            blue = 0
+        } else if sector < 3 {
+            red = 0
+            green = chroma
+            blue = x
+        } else if sector < 4 {
+            red = 0
+            green = x
+            blue = chroma
+        } else if sector < 5 {
+            red = x
+            green = 0
+            blue = chroma
+        } else {
+            red = chroma
+            green = 0
+            blue = x
+        }
+        return WallpaperSolidColor(red: red + match, green: green + match, blue: blue + match)
+    }
+
+    private func minimumPlaceholder(
+        _ fills: [WallpaperSolidColor],
+        lightScrim: Double,
+        darkScrim: Double,
+        darkOpacity: Double
+    ) -> Double {
+        var worst = 99.0
+        for fill in fills {
+            let choice = InkContrast.forFill(fill)
+            let surface = InkContrast.shown(fill, veil: choice.veil)
+            let scrim: InkColor
+            let placeholder: InkColor
+            switch choice.ink {
+            case .light:
+                scrim = .black(opacity: lightScrim)
+                placeholder = .white(opacity: 0.65)
+            case .dark:
+                scrim = .white(opacity: darkScrim)
+                placeholder = Ink.dark.label.opacity(darkOpacity)
+            }
+            let field = InkContrast.composite(scrim, over: surface)
+            worst = min(worst, contrast(InkContrast.composite(placeholder, over: solid(field)), on: field))
+        }
+        return worst
+    }
+
+    private func minimumDot(_ fills: [WallpaperSolidColor], opacity: Double) -> Double {
+        var worst = 99.0
+        for fill in fills {
+            let choice = InkContrast.forFill(fill)
+            let surface = InkContrast.shown(fill, veil: choice.veil)
+            let dot = choice.ink.label.opacity(opacity)
+            worst = min(worst, contrast(InkContrast.composite(dot, over: surface), on: surface))
+        }
+        return worst
     }
 }
