@@ -880,7 +880,9 @@ enum DesktopPicture {
                 alpha: 1
             ))
             context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            return dimmed(context, width: width, height: height)
+            // Same veil the ink decision used for this fill.
+            let veil = InkContrast.forFill(color).veil
+            return dimmed(context, width: width, height: height, veil: veil)
         } else if let url = job.url {
             guard let wallpaper = decodedThumbnail(at: url, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) else {
                 return nil
@@ -940,12 +942,12 @@ enum DesktopPicture {
                 return nil
             }
         }
-        return dimmed(context, width: width, height: height)
+        return dimmed(context, width: width, height: height, veil: WallpaperDim.black)
     }
 
-    /// One black veil on every backdrop, photo or flat, so both windows stay the same.
-    private static func dimmed(_ context: CGContext, width: Int, height: Int) -> CGImage? {
-        context.setFillColor(CGColor(gray: 0, alpha: CGFloat(WallpaperDim.black)))
+    /// Black veil. A flat fill uses the veil chosen with its ink. A photo keeps the normal veil.
+    private static func dimmed(_ context: CGContext, width: Int, height: Int, veil: Double) -> CGImage? {
+        context.setFillColor(CGColor(gray: 0, alpha: CGFloat(veil)))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
     }
