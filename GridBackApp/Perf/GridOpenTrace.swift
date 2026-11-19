@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import Darwin.Mach
 import GridBackCore
 import os
 
@@ -26,11 +27,15 @@ enum ProcessProbe {
     }
 
     private static func physicalFootprint() -> UInt64 {
-        var info = task_vm_info()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info>.size / MemoryLayout<integer_t>.size)
+        // `mach_task_self()` is a C macro for the variable `mach_task_self_`.
+        // Swift does not import that macro, so the call has to use the variable.
+        // `TASK_VM_INFO_COUNT` is also a macro Swift skips, so the count is the
+        // size of the buffer the kernel expects.
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { pointer -> kern_return_t in
             pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
-                task_info(mach_task_self(), task_flavor_t(TASK_VM_INFO), rebound, &count)
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), rebound, &count)
             }
         }
         guard result == KERN_SUCCESS else { return 0 }
