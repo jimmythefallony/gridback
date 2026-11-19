@@ -4,15 +4,25 @@
 # Usage: ./scripts/perf-report.sh [window]
 # window is how far back to look. The default is 1d. Examples: 12h, 30m, 7d.
 #
-# The summary is cold and warm open time (median and worst), average idle CPU,
-# average open CPU, and peak memory. CPU is a percent of one core. Memory is
-# the physical footprint in megabytes. An even count of opens uses the mean of
-# the two middle times. The first open in a run has no idle CPU, and that gap
-# is left out of the idle average.
+# The summary is cold and warm open time (median and worst), idle CPU over
+# the longer gaps, idle CPU over all gaps, average open CPU, and peak memory.
+# CPU is a percent of one core. Memory is the physical footprint in megabytes.
+# An even count of opens uses the mean of the two middle times.
+#
+# Closing the grid is part of the idle reading. A short gap is mostly that
+# work, so the longer-gap average leaves it out. The all-gaps average keeps
+# it. The first open in a run has no earlier close, so it has no idle CPU and
+# no gap, and it is left out of both averages. An idle reading with no
+# recorded length is kept in the all-gaps average and left out of the longer one.
 #
 # Pass --lines to summarize measurements on standard input instead of the log.
 # ./scripts/perf-report.sh --lines 1d
 set -euo pipefail
+
+# Change this one number to move the cutoff. A gap this long, or longer, is
+# counted in the longer-gap idle average. Shorter gaps stay in the all-gaps
+# average only. The open summary uses this same number of seconds.
+minimum_gap_seconds=60
 
 measurement_re='open (cold|warm) ms=([0-9]+) idleCPU=(none|[0-9]+\.[0-9]%) openCPU=([0-9]+\.[0-9]%) memOpenMB=([0-9]+) memCloseMB=([0-9]+) trigger=([a-z]+)'
 
@@ -32,19 +42,33 @@ tenths() {
 # Reads measurement lines on stdin. window is only the label in the sentences.
 summarize() {
   local window="$1"
-  local line idle_tenths open_tenths rows=""
+  local line idle_tenths open_tenths gap_seconds payload
+  local temperature ms idle_field open_field mem_open mem_close
+  local rows=""
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
     if [[ "$line" =~ $measurement_re ]]; then
+      temperature="${BASH_REMATCH[1]}"
+      ms="${BASH_REMATCH[2]}"
+      idle_field="${BASH_REMATCH[3]}"
+      open_field="${BASH_REMATCH[4]}"
+      mem_open="${BASH_REMATCH[5]}"
+      mem_close="${BASH_REMATCH[6]}"
       idle_tenths="-"
-      if [[ "${BASH_REMATCH[3]}" != "none" ]]; then
-        idle_tenths="$(tenths "${BASH_REMATCH[3]}")"
+      if [[ "$idle_field" != "none" ]]; then
+        idle_tenths="$(tenths "$idle_field")"
       fi
-      open_tenths="$(tenths "${BASH_REMATCH[4]}")"
-      rows+="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${idle_tenths} ${open_tenths} ${BASH_REMATCH[5]} ${BASH_REMATCH[6]}"$'\n'
+      open_tenths="$(tenths "$open_field")"
+      # The gap is part of the measurement, not of any text in front of it.
+      payload="${line#*open ${temperature} }"
+      gap_seconds="-"
+      if [[ "$payload" =~ gapS=([0-9]+) ]]; then
+        gap_seconds="${BASH_REMATCH[1]}"
+      fi
+      rows+="${temperature} ${ms} ${idle_tenths} ${open_tenths} ${mem_open} ${mem_close} ${gap_seconds}"$'\n'
     fi
   done
 
-  printf '%s' "$rows" | awk -v window="$window" '
+  printf '%s' "$rows" | awk -v window="$window" -v min_gap="$minimum_gap_seconds" '
     BEGIN { peak = 0 }
 
     function insert(sorted, n, value,    i) {
@@ -80,6 +104,16 @@ summarize() {
       return whole "." frac "%"
     }
 
+    function idle_text(sum, n) {
+      if (n + 0 == 0) return "none"
+      return format_tenths(round_div(sum, n))
+    }
+
+    function gaps_text(n) {
+      if (n == 1) return "1 gap"
+      return n " gaps"
+    }
+
     {
       temp = $1
       ms = $2 + 0
@@ -91,6 +125,10 @@ summarize() {
       if ($3 != "-") {
         idle_sum += $3 + 0
         idle_n++
+        if ($7 != "-" && $7 + 0 >= min_gap + 0) {
+          long_sum += $3 + 0
+          long_n++
+        }
       }
       if ($5 + 0 > peak) peak = $5 + 0
       if ($6 + 0 > peak) peak = $6 + 0
@@ -104,8 +142,8 @@ summarize() {
       print "GridBack open measurements, last " window
       print timing_line("cold", cold, cold_n + 0)
       print timing_line("warm", warm, warm_n + 0)
-      if (idle_n + 0 == 0) print "average idle CPU: none"
-      else print "average idle CPU: " format_tenths(round_div(idle_sum, idle_n))
+      print "average idle CPU, gaps of " min_gap "s or more: " idle_text(long_sum, long_n) " (" gaps_text(long_n + 0) ")"
+      print "average idle CPU, all gaps: " idle_text(idle_sum, idle_n) " (" gaps_text(idle_n + 0) ")"
       print "average open CPU: " format_tenths(round_div(open_sum, open_n))
       print "peak memory: " peak " MB"
     }

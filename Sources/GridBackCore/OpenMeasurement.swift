@@ -59,6 +59,18 @@ public enum ProcessLoad {
         return Int(rounded)
     }
 
+    /// Complete seconds, with the fraction left off. 59.9 seconds is 59.
+    /// Nil when the later reading is earlier than the first.
+    ///
+    /// The long idle average compares this whole number with the cutoff, so a
+    /// fraction of a second cannot push a gap over the line.
+    public static func seconds(from earlierWallNanos: UInt64, to laterWallNanos: UInt64) -> Int? {
+        guard laterWallNanos >= earlierWallNanos else { return nil }
+        let whole = (laterWallNanos - earlierWallNanos) / 1_000_000_000
+        guard whole <= UInt64(Int.max) else { return nil }
+        return Int(whole)
+    }
+
     /// One decimal and a dot, then a percent sign. 6.25 becomes "6.3%".
     ///
     /// The decimal mark is always a dot, so a Mac set to another region still
@@ -93,7 +105,10 @@ public struct OpenMeasurement: Equatable, Sendable {
     public var temperature: OpenTemperature
     public var milliseconds: Int
     /// Nil on the first open, which has no earlier close to compare with.
+    /// The gap starts at the previous close, so it includes the work of closing.
     public var idleCPUPercent: Double?
+    /// Complete seconds from the previous close to this open. Nil when there is no earlier close.
+    public var idleGapSeconds: Int?
     public var openCPUPercent: Double
     public var memoryOpenMB: Int
     public var memoryCloseMB: Int
@@ -103,6 +118,7 @@ public struct OpenMeasurement: Equatable, Sendable {
         temperature: OpenTemperature,
         milliseconds: Int,
         idleCPUPercent: Double?,
+        idleGapSeconds: Int? = nil,
         openCPUPercent: Double,
         memoryOpenMB: Int,
         memoryCloseMB: Int,
@@ -111,6 +127,7 @@ public struct OpenMeasurement: Equatable, Sendable {
         self.temperature = temperature
         self.milliseconds = milliseconds
         self.idleCPUPercent = idleCPUPercent
+        self.idleGapSeconds = idleGapSeconds
         self.openCPUPercent = openCPUPercent
         self.memoryOpenMB = memoryOpenMB
         self.memoryCloseMB = memoryCloseMB
@@ -133,26 +150,46 @@ public struct OpenTiming: Equatable, Sendable {
 public struct OpenSummary: Equatable, Sendable {
     public var cold: OpenTiming?
     public var warm: OpenTiming?
-    public var averageIdleCPUPercent: Double?
+    /// Idle CPU averaged over gaps of at least `OpenSummaryMath.minimumIdleGapSeconds`.
+    /// Nil when no gap was that long.
+    public var qualifyingIdleCPUPercent: Double?
+    /// How many gaps were long enough to be included in `qualifyingIdleCPUPercent`.
+    public var qualifyingGapCount: Int
+    /// Idle CPU averaged over every gap that has a reading, short gaps included.
+    /// Nil when no open had an earlier close.
+    public var everyGapIdleCPUPercent: Double?
+    /// How many gaps had an idle reading, whatever their length.
+    public var everyGapCount: Int
     public var averageOpenCPUPercent: Double?
     public var peakMemoryMB: Int?
 
     public init(
         cold: OpenTiming?,
         warm: OpenTiming?,
-        averageIdleCPUPercent: Double?,
+        qualifyingIdleCPUPercent: Double?,
+        qualifyingGapCount: Int,
+        everyGapIdleCPUPercent: Double?,
+        everyGapCount: Int,
         averageOpenCPUPercent: Double?,
         peakMemoryMB: Int?
     ) {
         self.cold = cold
         self.warm = warm
-        self.averageIdleCPUPercent = averageIdleCPUPercent
+        self.qualifyingIdleCPUPercent = qualifyingIdleCPUPercent
+        self.qualifyingGapCount = qualifyingGapCount
+        self.everyGapIdleCPUPercent = everyGapIdleCPUPercent
+        self.everyGapCount = everyGapCount
         self.averageOpenCPUPercent = averageOpenCPUPercent
         self.peakMemoryMB = peakMemoryMB
     }
 }
 
 public enum OpenSummaryMath {
+    /// Close and teardown sit at the start of a gap. A shorter gap is mostly
+    /// that work, so it stays out of the long idle average. The all-gaps
+    /// average still includes it. `scripts/perf-report.sh` uses this same number.
+    public static let minimumIdleGapSeconds = 60
+
     /// Middle value. An even count uses the mean of the two middle values.
     public static func median(_ values: [Int]) -> Double? {
         guard !values.isEmpty else { return nil }
@@ -169,16 +206,34 @@ public enum OpenSummaryMath {
         return values.reduce(0, +) / Double(values.count)
     }
 
-    /// Cold and warm are kept apart. Idle CPU skips opens that have none.
-    /// Peak memory is the highest open or close reading.
+    /// True when the gap lasted at least `minimumIdleGapSeconds`.
+    /// A missing length does not count, so an older line with no gap stays out.
+    public static func isLongIdleGap(_ seconds: Int?) -> Bool {
+        guard let seconds else { return false }
+        return seconds >= minimumIdleGapSeconds
+    }
+
+    /// Cold and warm are kept apart. The long idle average keeps gaps of at
+    /// least `minimumIdleGapSeconds`. The all-gaps average keeps every idle
+    /// reading, including the short gaps. An open with no earlier close is in
+    /// neither. Peak memory is the highest open or close reading.
     public static func summarize(_ measurements: [OpenMeasurement]) -> OpenSummary {
-        let idles = measurements.compactMap(\.idleCPUPercent)
+        let everyIdle = measurements.compactMap(\.idleCPUPercent)
+        let longIdle = measurements.compactMap { measurement -> Double? in
+            guard let idle = measurement.idleCPUPercent, isLongIdleGap(measurement.idleGapSeconds) else {
+                return nil
+            }
+            return idle
+        }
         let opens = measurements.map(\.openCPUPercent)
         let memories = measurements.flatMap { [$0.memoryOpenMB, $0.memoryCloseMB] }
         return OpenSummary(
             cold: timing(.cold, in: measurements),
             warm: timing(.warm, in: measurements),
-            averageIdleCPUPercent: average(idles),
+            qualifyingIdleCPUPercent: average(longIdle),
+            qualifyingGapCount: longIdle.count,
+            everyGapIdleCPUPercent: average(everyIdle),
+            everyGapCount: everyIdle.count,
             averageOpenCPUPercent: average(opens),
             peakMemoryMB: memories.max()
         )
@@ -197,14 +252,32 @@ public enum OpenSummaryText {
         guard summary.cold != nil || summary.warm != nil else {
             return "No GridBack open measurements in the last \(window)."
         }
+        let cutoff = OpenSummaryMath.minimumIdleGapSeconds
         return [
             "GridBack open measurements, last \(window)",
             timingLine("cold", summary.cold),
             timingLine("warm", summary.warm),
-            "average idle CPU: \(percent(summary.averageIdleCPUPercent))",
+            idleLine(
+                "average idle CPU, gaps of \(cutoff)s or more",
+                summary.qualifyingIdleCPUPercent,
+                count: summary.qualifyingGapCount
+            ),
+            idleLine(
+                "average idle CPU, all gaps",
+                summary.everyGapIdleCPUPercent,
+                count: summary.everyGapCount
+            ),
             "average open CPU: \(percent(summary.averageOpenCPUPercent))",
             "peak memory: \(memory(summary.peakMemoryMB))"
         ].joined(separator: "\n")
+    }
+
+    private static func idleLine(_ label: String, _ value: Double?, count: Int) -> String {
+        "\(label): \(percent(value)) (\(gaps(count)))"
+    }
+
+    private static func gaps(_ count: Int) -> String {
+        count == 1 ? "1 gap" : "\(count) gaps"
     }
 
     private static func timingLine(_ name: String, _ timing: OpenTiming?) -> String {
@@ -234,7 +307,11 @@ public enum PerfLogLine {
             idle = "none"
         }
         let openCPU = ProcessLoad.formatPercent(measurement.openCPUPercent)
-        return "open \(measurement.temperature.rawValue) ms=\(measurement.milliseconds) idleCPU=\(idle) openCPU=\(openCPU) memOpenMB=\(measurement.memoryOpenMB) memCloseMB=\(measurement.memoryCloseMB) trigger=\(measurement.trigger.rawValue)"
+        var line = "open \(measurement.temperature.rawValue) ms=\(measurement.milliseconds) idleCPU=\(idle) openCPU=\(openCPU) memOpenMB=\(measurement.memoryOpenMB) memCloseMB=\(measurement.memoryCloseMB) trigger=\(measurement.trigger.rawValue)"
+        if let gap = measurement.idleGapSeconds {
+            line += " gapS=\(gap)"
+        }
+        return line
     }
 
     /// Reads one measurement out of a log line. A prefix from `log show` is ignored.
@@ -259,6 +336,7 @@ public enum PerfLogLine {
         var memoryOpen: Int?
         var memoryClose: Int?
         var trigger: OpenTrigger?
+        var gapSeconds: Int?
 
         for token in tail.split(separator: " ") {
             guard let separator = token.firstIndex(of: "=") else { continue }
@@ -290,6 +368,9 @@ public enum PerfLogLine {
             case "trigger":
                 guard trigger == nil, let parsed = OpenTrigger(rawValue: String(value)) else { return nil }
                 trigger = parsed
+            case "gapS":
+                guard gapSeconds == nil, let parsed = wholeNumber(value) else { return nil }
+                gapSeconds = parsed
             default:
                 continue
             }
@@ -302,6 +383,7 @@ public enum PerfLogLine {
             temperature: temperature,
             milliseconds: milliseconds,
             idleCPUPercent: idleCPU,
+            idleGapSeconds: gapSeconds,
             openCPUPercent: openCPU,
             memoryOpenMB: memoryOpen,
             memoryCloseMB: memoryClose,
@@ -355,6 +437,7 @@ public enum GridOpenPhase: Equatable, Sendable {
         public var temperature: OpenTemperature?
         public var openSample: ProcessSample
         public var idleCPUPercent: Double?
+        public var idleGapSeconds: Int?
         public var frameWallNanos: UInt64?
     }
 
@@ -363,6 +446,7 @@ public enum GridOpenPhase: Equatable, Sendable {
         public var temperature: OpenTemperature
         public var openSample: ProcessSample
         public var idleCPUPercent: Double?
+        public var idleGapSeconds: Int?
         public var milliseconds: Int
     }
 }
@@ -425,16 +509,20 @@ public enum GridOpenSession {
         sample: ProcessSample
     ) -> GridOpenPhase.Opening {
         let idle: Double?
+        let gapSeconds: Int?
         if let lastClose {
             idle = ProcessLoad.cpuPercent(from: lastClose, to: sample)
+            gapSeconds = ProcessLoad.seconds(from: lastClose.wallNanos, to: sample.wallNanos)
         } else {
             idle = nil
+            gapSeconds = nil
         }
         return GridOpenPhase.Opening(
             trigger: trigger,
             temperature: nil,
             openSample: sample,
             idleCPUPercent: idle,
+            idleGapSeconds: gapSeconds,
             frameWallNanos: nil
         )
     }
@@ -454,6 +542,7 @@ public enum GridOpenSession {
             temperature: temperature,
             openSample: opening.openSample,
             idleCPUPercent: opening.idleCPUPercent,
+            idleGapSeconds: opening.idleGapSeconds,
             milliseconds: milliseconds
         ))
         return [.endInterval(.committed(temperature))]
@@ -468,6 +557,7 @@ public enum GridOpenSession {
             temperature: displayed.temperature,
             milliseconds: displayed.milliseconds,
             idleCPUPercent: displayed.idleCPUPercent,
+            idleGapSeconds: displayed.idleGapSeconds,
             openCPUPercent: openCPU,
             memoryOpenMB: ProcessLoad.megabytes(rounding: displayed.openSample.footprintBytes),
             memoryCloseMB: ProcessLoad.megabytes(rounding: close.footprintBytes),

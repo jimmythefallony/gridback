@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Idle CPU in the open summary uses gaps of a minute or longer. Each open records how long the grid stayed closed, and the average over every gap is still shown.
 - A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.
 - GridBack writes how fast the grid opened, and the CPU and memory around that open, to this Mac's log.
 
