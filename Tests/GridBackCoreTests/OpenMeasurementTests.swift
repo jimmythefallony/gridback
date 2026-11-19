@@ -77,9 +77,10 @@ final class OpenMeasurementTests: XCTestCase {
         XCTAssertEqual(measurement.memoryOpenMB, 92)
         XCTAssertEqual(measurement.memoryCloseMB, 95)
         XCTAssertEqual(measurement.trigger, .hotkey)
+        XCTAssertEqual(measurement.idleGapSeconds, 1)
         XCTAssertEqual(
             PerfLogLine.format(measurement),
-            "open warm ms=84 idleCPU=0.1% openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey"
+            "open warm ms=84 idleCPU=0.1% openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey gapS=1"
         )
     }
 
@@ -102,6 +103,7 @@ final class OpenMeasurementTests: XCTestCase {
             return XCTFail("Expected one log line")
         }
         XCTAssertNil(measurement.idleCPUPercent)
+        XCTAssertNil(measurement.idleGapSeconds)
         XCTAssertEqual(measurement.temperature, .cold)
         XCTAssertEqual(measurement.trigger, .menu)
         XCTAssertEqual(measurement.milliseconds, 120)
@@ -200,10 +202,11 @@ final class OpenMeasurementTests: XCTestCase {
         XCTAssertEqual(OpenSummaryMath.median([90, 10, 40]), 40)
         XCTAssertEqual(OpenSummaryMath.median([80, 81]), 80.5)
 
+        let cutoff = OpenSummaryMath.minimumIdleGapSeconds
         let measurements = [
             measurement(.cold, ms: 100, idle: nil, open: 10, memOpen: 80, memClose: 90, trigger: .hotkey),
-            measurement(.warm, ms: 80, idle: 0.1, open: 6, memOpen: 90, memClose: 95, trigger: .hotkey),
-            measurement(.warm, ms: 81, idle: 0.3, open: 8, memOpen: 91, memClose: 96, trigger: .menu)
+            measurement(.warm, ms: 80, idle: 0.1, open: 6, memOpen: 90, memClose: 95, trigger: .hotkey, gap: cutoff),
+            measurement(.warm, ms: 81, idle: 0.3, open: 8, memOpen: 91, memClose: 96, trigger: .menu, gap: cutoff - 1)
         ]
         let summary = OpenSummaryMath.summarize(measurements)
         XCTAssertEqual(summary.cold?.medianMilliseconds, 100)
@@ -212,7 +215,10 @@ final class OpenMeasurementTests: XCTestCase {
         XCTAssertEqual(summary.warm?.medianMilliseconds, 80.5)
         XCTAssertEqual(summary.warm?.worstMilliseconds, 81)
         XCTAssertEqual(summary.warm?.count, 2)
-        XCTAssertEqual(summary.averageIdleCPUPercent ?? -1, 0.2, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.qualifyingIdleCPUPercent ?? -1, 0.1, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.qualifyingGapCount, 1)
+        XCTAssertEqual(summary.everyGapIdleCPUPercent ?? -1, 0.2, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.everyGapCount, 2)
         XCTAssertEqual(summary.averageOpenCPUPercent ?? -1, 8, accuracy: 0.000_000_1)
         XCTAssertEqual(summary.peakMemoryMB, 96)
         XCTAssertEqual(
@@ -221,7 +227,8 @@ final class OpenMeasurementTests: XCTestCase {
             GridBack open measurements, last 1d
             cold open: median 100 ms, worst 100 ms, count 1
             warm open: median 80.5 ms, worst 81 ms, count 2
-            average idle CPU: 0.2%
+            average idle CPU, gaps of \(cutoff)s or more: 0.1% (1 gap)
+            average idle CPU, all gaps: 0.2% (2 gaps)
             average open CPU: 8.0%
             peak memory: 96 MB
             """
@@ -232,7 +239,10 @@ final class OpenMeasurementTests: XCTestCase {
         let summary = OpenSummaryMath.summarize([])
         XCTAssertNil(summary.cold)
         XCTAssertNil(summary.warm)
-        XCTAssertNil(summary.averageIdleCPUPercent)
+        XCTAssertNil(summary.qualifyingIdleCPUPercent)
+        XCTAssertEqual(summary.qualifyingGapCount, 0)
+        XCTAssertNil(summary.everyGapIdleCPUPercent)
+        XCTAssertEqual(summary.everyGapCount, 0)
         XCTAssertNil(summary.averageOpenCPUPercent)
         XCTAssertNil(summary.peakMemoryMB)
         XCTAssertEqual(
@@ -251,7 +261,8 @@ final class OpenMeasurementTests: XCTestCase {
             GridBack open measurements, last 1d
             cold open: median 120 ms, worst 120 ms, count 1
             warm open: none
-            average idle CPU: none
+            average idle CPU, gaps of \(OpenSummaryMath.minimumIdleGapSeconds)s or more: none (0 gaps)
+            average idle CPU, all gaps: none (0 gaps)
             average open CPU: 11.0%
             peak memory: 139 MB
             """
@@ -259,22 +270,138 @@ final class OpenMeasurementTests: XCTestCase {
     }
 
     func testLogLineRoundTripAndAPrefixIsIgnored() {
-        let line = "open warm ms=84 idleCPU=0.1% openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey"
+        let line = "open warm ms=84 idleCPU=0.1% openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey gapS=312"
         let parsed = PerfLogLine.parse(line)
         XCTAssertEqual(parsed?.temperature, .warm)
         XCTAssertEqual(parsed?.milliseconds, 84)
         XCTAssertEqual(parsed?.idleCPUPercent, 0.1)
+        XCTAssertEqual(parsed?.idleGapSeconds, 312)
         XCTAssertEqual(parsed?.openCPUPercent, 6.2)
         XCTAssertEqual(parsed?.memoryOpenMB, 92)
         XCTAssertEqual(parsed?.memoryCloseMB, 95)
         XCTAssertEqual(parsed?.trigger, .hotkey)
         XCTAssertEqual(parsed.map(PerfLogLine.format), line)
 
+        let older = "open warm ms=84 idleCPU=0.1% openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey"
+        let parsedOlder = PerfLogLine.parse(older)
+        XCTAssertEqual(parsedOlder?.idleCPUPercent, 0.1)
+        XCTAssertNil(parsedOlder?.idleGapSeconds)
+        XCTAssertEqual(parsedOlder.map(PerfLogLine.format), older)
+
         let prefixed = PerfLogLine.parse("notice \(line)")
         XCTAssertEqual(prefixed, parsed)
         XCTAssertNil(PerfLogLine.parse("open warm ms=84 idleCPU=0.1%"))
         XCTAssertNil(PerfLogLine.parse("open warm ms=84 idleCPU=none openCPU=6% memOpenMB=92 memCloseMB=95 trigger=hotkey"))
+        XCTAssertNil(PerfLogLine.parse("\(line) gapS=1"))
+        XCTAssertNil(PerfLogLine.parse("open warm ms=84 idleCPU=0.1% gapS=no openCPU=6.2% memOpenMB=92 memCloseMB=95 trigger=hotkey"))
         XCTAssertNil(PerfLogLine.parse("nothing to read"))
+    }
+
+    func testSecondsKeepOnlyCompleteSeconds() {
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 0), 0)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 999_999_999), 0)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 1_000_000_000), 1)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 312_000_000_000), 312)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 312_900_000_000), 312)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 59_999_999_999), 59)
+        XCTAssertEqual(ProcessLoad.seconds(from: 0, to: 60_000_000_000), 60)
+        XCTAssertNil(ProcessLoad.seconds(from: 20, to: 19))
+    }
+
+    func testALongGapIsRecordedOnTheLine() {
+        var phase = GridOpenSession.start()
+        _ = GridOpenSession.advance(&phase, .trigger(.hotkey, sample(cpu: 0, wall: 0, bytes: megabyte)))
+        _ = GridOpenSession.advance(&phase, .temperature(.cold))
+        _ = GridOpenSession.advance(&phase, .frameCommitted(wallNanos: 10_000_000))
+        _ = GridOpenSession.advance(&phase, .close(sample(cpu: 0, wall: 1_000_000_000, bytes: megabyte)))
+
+        let openWall: UInt64 = 1_000_000_000 + 312_000_000_000
+        _ = GridOpenSession.advance(&phase, .trigger(.menu, sample(cpu: 312_000_000, wall: openWall, bytes: megabyte)))
+        _ = GridOpenSession.advance(&phase, .temperature(.warm))
+        _ = GridOpenSession.advance(&phase, .frameCommitted(wallNanos: openWall + 40_000_000))
+        let closed = GridOpenSession.advance(
+            &phase,
+            .close(sample(cpu: 312_000_000, wall: openWall + 1_000_000_000, bytes: megabyte))
+        )
+        guard case .log(let measurement) = closed.first, closed.count == 1 else {
+            return XCTFail("Expected one log line")
+        }
+        XCTAssertEqual(measurement.idleGapSeconds, 312)
+        XCTAssertEqual(measurement.idleCPUPercent ?? -1, 0.1, accuracy: 0.000_000_1)
+        XCTAssertEqual(
+            PerfLogLine.format(measurement),
+            "open warm ms=40 idleCPU=0.1% openCPU=0.0% memOpenMB=1 memCloseMB=1 trigger=menu gapS=312"
+        )
+    }
+
+    func testShortGapsStayInTheAllGapsAverageOnly() {
+        let cutoff = OpenSummaryMath.minimumIdleGapSeconds
+        XCTAssertFalse(OpenSummaryMath.isLongIdleGap(nil))
+        XCTAssertFalse(OpenSummaryMath.isLongIdleGap(0))
+        XCTAssertFalse(OpenSummaryMath.isLongIdleGap(cutoff - 1))
+        XCTAssertTrue(OpenSummaryMath.isLongIdleGap(cutoff))
+
+        let summary = OpenSummaryMath.summarize([
+            measurement(.warm, ms: 40, idle: 6, open: 4, memOpen: 10, memClose: 10, trigger: .hotkey, gap: 2),
+            measurement(.warm, ms: 40, idle: 0.4, open: 4, memOpen: 10, memClose: 10, trigger: .hotkey, gap: cutoff - 1),
+            measurement(.warm, ms: 40, idle: 0.2, open: 4, memOpen: 10, memClose: 10, trigger: .hotkey, gap: cutoff)
+        ])
+        XCTAssertEqual(summary.qualifyingIdleCPUPercent ?? -1, 0.2, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.qualifyingGapCount, 1)
+        XCTAssertEqual(summary.everyGapIdleCPUPercent ?? -1, 2.2, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.everyGapCount, 3)
+    }
+
+    func testNoQualifyingGapStillShowsTheAllGapsAverage() {
+        let summary = OpenSummaryMath.summarize([
+            measurement(.warm, ms: 40, idle: 6, open: 4, memOpen: 10, memClose: 12, trigger: .hotkey, gap: 2),
+            measurement(.warm, ms: 41, idle: 0.4, open: 5, memOpen: 11, memClose: 12, trigger: .menu, gap: 9)
+        ])
+        XCTAssertNil(summary.qualifyingIdleCPUPercent)
+        XCTAssertEqual(summary.qualifyingGapCount, 0)
+        XCTAssertEqual(summary.everyGapIdleCPUPercent ?? -1, 3.2, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.everyGapCount, 2)
+        let cutoff = OpenSummaryMath.minimumIdleGapSeconds
+        XCTAssertEqual(
+            OpenSummaryText.render(summary, last: "1d"),
+            """
+            GridBack open measurements, last 1d
+            cold open: none
+            warm open: median 40.5 ms, worst 41 ms, count 2
+            average idle CPU, gaps of \(cutoff)s or more: none (0 gaps)
+            average idle CPU, all gaps: 3.2% (2 gaps)
+            average open CPU: 4.5%
+            peak memory: 12 MB
+            """
+        )
+    }
+
+    func testAnIdleReadingWithoutAGapLengthIsNotTreatedAsLong() {
+        let summary = OpenSummaryMath.summarize([
+            measurement(.warm, ms: 40, idle: 1.5, open: 2, memOpen: 8, memClose: 8, trigger: .hotkey)
+        ])
+        XCTAssertNil(summary.qualifyingIdleCPUPercent)
+        XCTAssertEqual(summary.qualifyingGapCount, 0)
+        XCTAssertEqual(summary.everyGapIdleCPUPercent ?? -1, 1.5, accuracy: 0.000_000_1)
+        XCTAssertEqual(summary.everyGapCount, 1)
+    }
+
+    func testAClockThatStepsBackwardsOmitsTheGap() {
+        var phase = GridOpenSession.start()
+        _ = GridOpenSession.advance(&phase, .trigger(.hotkey, sample(cpu: 0, wall: 5_000_000_000)))
+        _ = GridOpenSession.advance(&phase, .temperature(.cold))
+        _ = GridOpenSession.advance(&phase, .frameCommitted(wallNanos: 5_010_000_000))
+        _ = GridOpenSession.advance(&phase, .close(sample(cpu: 10, wall: 6_000_000_000)))
+        _ = GridOpenSession.advance(&phase, .trigger(.hotkey, sample(cpu: 10, wall: 1_000)))
+        _ = GridOpenSession.advance(&phase, .temperature(.warm))
+        _ = GridOpenSession.advance(&phase, .frameCommitted(wallNanos: 1_000))
+        let closed = GridOpenSession.advance(&phase, .close(sample(cpu: 10, wall: 2_000_000_000)))
+        guard case .log(let measurement) = closed.first else {
+            return XCTFail("Expected one log line")
+        }
+        XCTAssertNil(measurement.idleGapSeconds)
+        XCTAssertNil(measurement.idleCPUPercent)
+        XCTAssertFalse(PerfLogLine.format(measurement).contains("gapS="))
     }
 
     private func displayedPhase() -> GridOpenPhase {
@@ -300,12 +427,14 @@ final class OpenMeasurementTests: XCTestCase {
         open: Double,
         memOpen: Int,
         memClose: Int,
-        trigger: OpenTrigger
+        trigger: OpenTrigger,
+        gap: Int? = nil
     ) -> OpenMeasurement {
         OpenMeasurement(
             temperature: temperature,
             milliseconds: ms,
             idleCPUPercent: idle,
+            idleGapSeconds: gap,
             openCPUPercent: open,
             memoryOpenMB: memOpen,
             memoryCloseMB: memClose,
