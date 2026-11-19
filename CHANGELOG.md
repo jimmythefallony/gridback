@@ -3,6 +3,7 @@
 ## Unreleased
 
 - A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.
+- GridBack writes how fast the grid opened, and the CPU and memory around that open, to this Mac's log.
 
 ## v0.3.7 (2026-11-18)
 

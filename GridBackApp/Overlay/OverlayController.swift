@@ -61,19 +61,25 @@ final class OverlayController: NSObject {
     }
 
     func show() {
+        // The hotkey already started the interval. Any other trigger starts here.
+        GridOpenTrace.shared.showTriggerArrived()
         guard let model else {
             log.error("Show skipped: overlay has no model")
+            GridOpenTrace.shared.abandonOpening()
             return
         }
         guard let screen = PrimaryDisplay.screen() else {
             log.error("Show skipped: no primary display")
+            GridOpenTrace.shared.abandonOpening()
             return
         }
         wantsGrid = true
         showGeneration += 1
         let generation = showGeneration
+        let createdPanel = self.panel == nil
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
+        GridOpenTrace.shared.notePanel(created: createdPanel)
         let backdrop = self.dockBackdrop ?? DockBackdropPanel(screen: screen, ink: model.ink)
         self.dockBackdrop = backdrop
         // The window already stops at the Dock and covers the menu bar, so the
@@ -109,6 +115,7 @@ final class OverlayController: NSObject {
     }
 
     func hide() {
+        GridOpenTrace.shared.gridClosed()
         wantsGrid = false
         removeEscapeMonitor()
         // If the system launcher is still underneath, close it with us so a
@@ -498,6 +505,7 @@ final class OverlayController: NSObject {
         if let screen = PrimaryDisplay.screen() {
             logDockBand(panel: panel, backdrop: backdrop, on: screen)
         }
+        GridOpenTrace.shared.panelOrderedFront()
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {

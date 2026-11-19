@@ -143,6 +143,14 @@
 			isa = PBXBuildFile;
 			fileRef = E4C91A7B2D8F46C0A1B29303;
 		};
+		A91C0E77F9B1C2D3E4F50602 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = A91C0E77F9B1C2D3E4F50601;
+		};
+		A91C0E77F9B1C2D3E4F50612 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = A91C0E77F9B1C2D3E4F50611;
+		};
 		0A0000000000000000000019 /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			productRef = 0A0000000000000000000017;
@@ -374,6 +382,18 @@
 			path = QuitConfirmationTests.swift;
 			sourceTree = "<group>";
 		};
+		A91C0E77F9B1C2D3E4F50601 /* GridOpenTrace.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = GridOpenTrace.swift;
+			sourceTree = "<group>";
+		};
+		A91C0E77F9B1C2D3E4F50611 /* OpenMeasurementTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = OpenMeasurementTests.swift;
+			sourceTree = "<group>";
+		};
 		0A0000000000000000000014 /* GridBack.app */ = {
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
@@ -457,6 +477,14 @@
 			path = Hotkey;
 			sourceTree = "<group>";
 		};
+		A91C0E77F9B1C2D3E4F50603 /* Perf */ = {
+			isa = PBXGroup;
+			children = (
+				A91C0E77F9B1C2D3E4F50601,
+			);
+			path = Perf;
+			sourceTree = "<group>";
+		};
 		7BEC95EE5555FF8D844D638C /* Overlay */ = {
 			isa = PBXGroup;
 			children = (
@@ -495,6 +523,7 @@
 				739E2478012398C1E51BB8FD,
 				FD22D9F232F2AC493E6320CE,
 				7BEC95EE5555FF8D844D638C,
+				A91C0E77F9B1C2D3E4F50603,
 				79F12C1395AFFB5366462D09,
 				E65F150400D5835E0456A0AB,
 				A757FB1518612DE09BAA76F9,
@@ -517,6 +546,7 @@
 				D3F6B8A90C192A3B4C5D6E06,
 				A7E1B2C3D4E5F60718293A03,
 				E4C91A7B2D8F46C0A1B29303,
+				A91C0E77F9B1C2D3E4F50611,
 			);
 			path = GridBackCoreTests;
 			sourceTree = "<group>";
@@ -672,6 +702,7 @@
 				A0C3E5D709192A3B4C5D6E03,
 				A7E1B2C3D4E5F60718293A02,
 				E4C91A7B2D8F46C0A1B29302,
+				A91C0E77F9B1C2D3E4F50602,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -689,6 +720,7 @@
 				C2E5A7B90B192A3B4C5D6E05,
 				A7E1B2C3D4E5F60718293A04,
 				E4C91A7B2D8F46C0A1B29304,
+				A91C0E77F9B1C2D3E4F50612,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
