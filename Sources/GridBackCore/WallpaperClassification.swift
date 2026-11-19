@@ -238,21 +238,27 @@ public enum WallpaperStoreIndex {
     }
 
     static func choice(inEntry entry: [String: Any]) -> WallpaperStoreChoice? {
-        guard let desktop = entry["Desktop"] as? [String: Any],
-              let content = desktop["Content"] as? [String: Any],
+        // `Desktop` is this display's own choice. `Linked` is that choice when
+        // it is shared by every Space. Only a colour is read from `Linked`.
+        guard let holder = contentHolder(in: entry),
+              let content = holder.root["Content"] as? [String: Any],
               let choices = elements(content["Choices"]),
               let first = choices.first as? [String: Any],
               let provider = first["Provider"] as? String,
               !provider.isEmpty else {
             return nil
         }
+        if holder.linkedOnly && provider != colorProvider { return nil }
         let configuration = decodePropertyList(first["Configuration"]) ?? [:]
         let keys = configuration.keys.filter(isSafeKeyName).sorted()
         let folder = provider == imageFolderProvider
         let parsed = provider == imageProvider
             ? WallpaperURLParser.parse(url: configuration["url"], files: first["Files"])
             : WallpaperURLParser.empty
-        let found = provider == colorProvider ? findColor(in: configuration, depth: 0) : (color: nil, imagePath: nil)
+        let custom = provider == colorProvider ? customColor(configuration: configuration, content: content) : nil
+        let found = provider == colorProvider && custom == nil && !isCustomColor(configuration)
+            ? findColor(in: configuration, depth: 0)
+            : (color: nil, imagePath: nil)
         let systemColor = configuration["systemColor"]
         let colorLog = provider == colorProvider
             ? WallpaperValueLog.colorProviderLine(systemColor: systemColor, type: configuration["type"])
@@ -260,7 +266,7 @@ public enum WallpaperStoreIndex {
         let colorName = provider == colorProvider ? WallpaperSystemColor.enumName(from: systemColor) : nil
         let probe = provider == colorProvider
             ? WallpaperStructureProbe.inspect(
-                desktop: desktop,
+                desktop: holder.root,
                 content: content,
                 choice: first,
                 configuration: configuration
@@ -271,7 +277,7 @@ public enum WallpaperStoreIndex {
             configKeys: keys,
             imageFilePath: parsed.paths.first,
             isFolder: folder,
-            solidColor: found.color,
+            solidColor: custom ?? found.color,
             solidColorImagePath: found.imagePath,
             systemColorName: colorName,
             colorValueLog: colorLog,
@@ -282,6 +288,69 @@ public enum WallpaperStoreIndex {
             structureLog: probe.line,
             archivedColor: probe.archive
         )
+    }
+
+    /// The desktop record, and whether it came from the shared `Linked` choice.
+    private struct ContentHolder {
+        var root: [String: Any]
+        var linkedOnly: Bool
+    }
+
+    private static func contentHolder(in entry: [String: Any]) -> ContentHolder? {
+        if let desktop = entry["Desktop"] as? [String: Any] {
+            return ContentHolder(root: desktop, linkedOnly: false)
+        }
+        if let linked = entry["Linked"] as? [String: Any] {
+            return ContentHolder(root: linked, linkedOnly: true)
+        }
+        return nil
+    }
+
+    /// The colour from the + button. It is stored under `values.customColor`
+    /// when `type` is `customColor`, either in the configuration or in the
+    /// encoded options beside the choice. Any other type leaves that value
+    /// unread. A missing or unexpected value is nil.
+    private static func customColor(configuration: [String: Any], content: [String: Any]) -> WallpaperSolidColor? {
+        guard isCustomColor(configuration) else { return nil }
+        if let color = customColor(inValues: configuration["values"]) { return color }
+        guard let options = decodePropertyList(content["EncodedOptionValues"]) else { return nil }
+        return customColor(inValues: options["values"])
+    }
+
+    private static func isCustomColor(_ configuration: [String: Any]) -> Bool {
+        configuration["type"] as? String == "customColor"
+    }
+
+    private static func customColor(inValues values: Any?) -> WallpaperSolidColor? {
+        guard let values = decodePropertyList(values) else { return nil }
+        return nestedColor(values["customColor"], depth: 0)
+    }
+
+    /// A custom colour may be the components themselves, or nested inside the
+    /// option record. Data and text are decoded with the same property-list
+    /// encodings as the configuration. Anything else is not a colour.
+    private static func nestedColor(_ value: Any?, depth: Int) -> WallpaperSolidColor? {
+        if depth > 8 { return nil }
+        if let color = WallpaperColorReading.color(from: value) { return color }
+        if value is Data || value is String, let expanded = decodePropertyList(value) {
+            return nestedColor(expanded, depth: depth + 1)
+        }
+        guard let dictionary = value as? [String: Any] else { return nil }
+        let keys = dictionary.keys.sorted { lhs, rhs in
+            let rank = colorKeyRank(lhs) - colorKeyRank(rhs)
+            if rank != 0 { return rank < 0 }
+            return lhs < rhs
+        }
+        for key in keys {
+            if let color = nestedColor(dictionary[key], depth: depth + 1) { return color }
+        }
+        return nil
+    }
+
+    private static func colorKeyRank(_ key: String) -> Int {
+        let lowered = key.lowercased()
+        if lowered == "components" || lowered.contains("color") || lowered.contains("colour") { return 0 }
+        return 1
     }
 
     static func decodePropertyList(_ value: Any?) -> [String: Any]? {
@@ -333,6 +402,9 @@ public enum WallpaperStoreIndex {
         }
         var imagePath: String?
         for (key, nested) in dictionary {
+            // A custom colour belongs only to a `customColor` choice. Other
+            // types keep their own colour and do not read this leftover value.
+            if key == "customColor" { continue }
             if isColorKey(key), let color = WallpaperColorReading.color(from: nested) {
                 return (color, imagePath)
             }

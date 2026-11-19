@@ -1250,6 +1250,238 @@ final class WallpaperClassificationTests: XCTestCase {
         XCTAssertFalse(checked.contains("/Library"))
     }
 
+    func testCustomColourIsReadInEveryStoredEncoding() {
+        let components: [String: Any] = ["components": [0.2, 0.4, 0.6, 1.0]]
+        for payload in storedEncodings(customColor: components) {
+            let choice = customChoice(payload.configuration, encodedOptions: payload.options, linked: payload.linked)
+            XCTAssertEqual(choice?.solidColor?.red ?? -1, 0.2, accuracy: 0.001)
+            XCTAssertEqual(choice?.solidColor?.green ?? -1, 0.4, accuracy: 0.001)
+            XCTAssertEqual(choice?.solidColor?.blue ?? -1, 0.6, accuracy: 0.001)
+            XCTAssertEqual(
+                WallpaperChoicePolicy.resolve(choice: choice, workspacePath: nil, imageFileReadable: false).use,
+                .solid(choice?.solidColor ?? WallpaperSolidColor(red: 0, green: 0, blue: 0))
+            )
+        }
+
+        let channels = customChoice(configuration(["customColor": ["red": 0.2, "green": 0.4, "blue": 0.6]]))
+        XCTAssertEqual(channels?.solidColor?.red ?? -1, 0.2, accuracy: 0.001)
+        XCTAssertEqual(channels?.solidColor?.green ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(channels?.solidColor?.blue ?? -1, 0.6, accuracy: 0.001)
+        let short = customChoice(configuration(["customColor": ["r": 51, "g": 102, "b": 153]]))
+        XCTAssertEqual(short?.solidColor?.red ?? -1, 51.0 / 255, accuracy: 0.001)
+        XCTAssertEqual(short?.solidColor?.green ?? -1, 102.0 / 255, accuracy: 0.001)
+        XCTAssertEqual(short?.solidColor?.blue ?? -1, 153.0 / 255, accuracy: 0.001)
+        let grey = customChoice(configuration(["customColor": [0.25]]))
+        XCTAssertEqual(grey?.solidColor?.red ?? -1, 0.25, accuracy: 0.001)
+        XCTAssertEqual(grey?.solidColor?.green ?? -1, 0.25, accuracy: 0.001)
+        XCTAssertEqual(grey?.solidColor?.blue ?? -1, 0.25, accuracy: 0.001)
+
+        let nested = linkedCustomChoice(customColor: [
+            "color": ["_0": ["color": ["colorSpace": 16, "components": [0.2, 0.4, 0.6, 1.0]]]]
+        ])
+        XCTAssertEqual(nested?.solidColor?.red ?? -1, 0.2, accuracy: 0.001)
+        XCTAssertEqual(nested?.solidColor?.green ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(nested?.solidColor?.blue ?? -1, 0.6, accuracy: 0.001)
+        XCTAssertFalse(nested?.colorValueLog.contains("/") == true)
+    }
+
+    func testOtherWallpaperTypesIgnoreCustomColour() {
+        let peach = ["components": [1.0, 0.8, 0.64, 1.0]]
+        let system = customChoice([
+            "type": "system",
+            "systemColor": ["components": [0.0, 0.0, 1.0, 1.0]],
+            "values": ["customColor": peach]
+        ])
+        XCTAssertEqual(system?.solidColor?.blue ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(system?.solidColor?.red ?? -1, 0, accuracy: 0.001)
+        let named = customChoice(
+            ["type": "systemColor", "systemColor": ["plum": [String: Any]()], "values": ["customColor": peach]],
+            encodedOptions: ["values": ["customColor": peach]]
+        )
+        XCTAssertNil(named?.solidColor)
+        XCTAssertEqual(named?.systemColorName, "plum")
+        let shuffle = customChoice(["type": "shuffle", "values": ["customColor": peach]])
+        XCTAssertNil(shuffle?.solidColor)
+        let numbered = customChoice(["type": 1, "values": ["customColor": peach]])
+        XCTAssertNil(numbered?.solidColor)
+
+        let picture = imageEntry(provider: WallpaperStoreIndex.imageProvider, path: "/Library/Desktop Pictures/Still.jpg")
+        var content = ((picture["Desktop"] as? [String: Any])?["Content"] as? [String: Any]) ?? [:]
+        content["EncodedOptionValues"] = binaryPlist(["values": ["customColor": peach]])
+        var desktop = picture["Desktop"] as? [String: Any] ?? [:]
+        desktop["Content"] = content
+        var stored = picture
+        stored["Desktop"] = desktop
+        let image = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": stored], displayUUID: nil)
+        XCTAssertEqual(image?.imageFilePath, "/Library/Desktop Pictures/Still.jpg")
+        XCTAssertNil(image?.solidColor)
+        XCTAssertEqual(
+            WallpaperChoicePolicy.resolve(choice: image, workspacePath: nil, imageFileReadable: true).use,
+            .imageFile("/Library/Desktop Pictures/Still.jpg")
+        )
+        var withLinkedColour = stored
+        withLinkedColour["Linked"] = [
+            "Content": [
+                "Choices": [[
+                    "Provider": WallpaperStoreIndex.colorProvider,
+                    "Configuration": ["type": "customColor", "values": ["customColor": peach]]
+                ] as [String: Any]] as [Any]
+            ]
+        ]
+        let kept = WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": withLinkedColour], displayUUID: nil)
+        XCTAssertEqual(kept?.imageFilePath, "/Library/Desktop Pictures/Still.jpg")
+        XCTAssertNil(kept?.solidColor)
+
+        let linkedPicture: [String: Any] = [
+            "Linked": [
+                "Content": [
+                    "Choices": [[
+                        "Provider": WallpaperStoreIndex.imageProvider,
+                        "Configuration": binaryPlist([
+                            "type": "imageFile",
+                            "url": fileURL("/Library/Desktop Pictures/Still.jpg")
+                        ])
+                    ] as [String: Any]] as [Any],
+                    "EncodedOptionValues": binaryPlist(["values": ["customColor": peach]])
+                ]
+            ]
+        ]
+        XCTAssertNil(WallpaperStoreIndex.choice(in: ["Displays": ["main-display": linkedPicture]], displayUUID: "main-display"))
+    }
+
+    func testMissingOrGarbageCustomColourFallsBack() {
+        let missing = customChoice(["type": "customColor"])
+        XCTAssertNil(missing?.solidColor)
+        XCTAssertEqual(fallbackUse(missing), .plainBlur)
+        let absent = customChoice(["type": "customColor", "values": ["note": "none"]])
+        XCTAssertNil(absent?.solidColor)
+        XCTAssertEqual(fallbackUse(absent), .plainBlur)
+        let text = customChoice(configuration(["customColor": "not-a-colour"]))
+        XCTAssertNil(text?.solidColor)
+        XCTAssertEqual(fallbackUse(text), .plainBlur)
+        let broken = customChoice(configuration(["customColor": ["components": ["nope"]]]))
+        XCTAssertNil(broken?.solidColor)
+        XCTAssertEqual(fallbackUse(broken), .plainBlur)
+        let range = customChoice(configuration(["customColor": ["components": [300.0, 0.0, 0.0]]]))
+        XCTAssertNil(range?.solidColor)
+        XCTAssertEqual(fallbackUse(range), .plainBlur)
+        let blob = linkedCustomChoice(encodedValues: Data("not a plist".utf8))
+        XCTAssertNil(blob?.solidColor)
+        XCTAssertEqual(fallbackUse(blob), .plainBlur)
+        XCTAssertFalse(text?.colorValueLog.contains("/") == true)
+    }
+
+    func testCustomColourInkFollowsTheFillAndIgnoresThePreviousInk() {
+        let peachFill = customFill(red: 0xFF, green: 0xCB, blue: 0xA4)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(peachFill), previous: .light), .dark)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(peachFill), previous: .dark), .dark)
+        XCTAssertEqual(InkContrast.forFill(peachFill).ink, .dark)
+        XCTAssertEqual(InkContrast.forFill(peachFill).veil, WallpaperDim.black)
+
+        let darkFill = customFill(red: 0x1A, green: 0x1A, blue: 0x1C)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(darkFill), previous: .light), .light)
+        XCTAssertEqual(Ink.forBackdrop(.solidColor(darkFill), previous: .dark), .light)
+        XCTAssertEqual(InkContrast.forFill(darkFill).ink, .light)
+        XCTAssertEqual(
+            Ink.forBackdrop(.solidColor(darkFill), previous: .light),
+            Ink.forBackdrop(.solidColor(darkFill), previous: .dark)
+        )
+    }
+
+    private func customFill(red: Int, green: Int, blue: Int) -> WallpaperSolidColor {
+        let color: [String: Any] = [
+            "color": [
+                "_0": [
+                    "color": [
+                        "colorSpace": 16,
+                        "components": [Double(red) / 255, Double(green) / 255, Double(blue) / 255, 1.0]
+                    ]
+                ]
+            ]
+        ]
+        let choice = linkedCustomChoice(customColor: color)
+        let fill = choice?.solidColor ?? WallpaperSolidColor(red: -1, green: -1, blue: -1)
+        XCTAssertEqual(fill.red, Double(red) / 255, accuracy: 0.000_1)
+        XCTAssertEqual(fill.green, Double(green) / 255, accuracy: 0.000_1)
+        XCTAssertEqual(fill.blue, Double(blue) / 255, accuracy: 0.000_1)
+        let use = WallpaperChoicePolicy.resolve(choice: choice, workspacePath: nil, imageFileReadable: false)
+        XCTAssertEqual(use.kind, .solidColor)
+        if case .solid(let solid) = use.use {
+            XCTAssertEqual(solid.red, fill.red, accuracy: 0.000_1)
+            XCTAssertEqual(solid.green, fill.green, accuracy: 0.000_1)
+            XCTAssertEqual(solid.blue, fill.blue, accuracy: 0.000_1)
+        } else {
+            XCTFail("custom colour was not a flat fill")
+        }
+        return fill
+    }
+
+    private func fallbackUse(_ choice: WallpaperStoreChoice?) -> WallpaperUse {
+        WallpaperChoicePolicy.resolve(choice: choice, workspacePath: nil, imageFileReadable: false).use
+    }
+
+    private func configuration(_ customColor: Any) -> [String: Any] {
+        ["type": "customColor", "values": customColor]
+    }
+
+    private func storedEncodings(customColor: Any) -> [(configuration: Any, options: Any?, linked: Bool)] {
+        let payload = configuration(["customColor": customColor])
+        let values = binaryPlist(["values": ["customColor": customColor]])
+        let typeOnly = binaryPlist(["type": "customColor"])
+        return [
+            (payload, nil, false),
+            (binaryPlist(payload), nil, false),
+            (binaryPlist(payload).base64EncodedString(), nil, false),
+            (xmlPlist(payload), nil, false),
+            (typeOnly, values, true),
+            (typeOnly, values.base64EncodedString(), true),
+            (typeOnly, xmlPlistData(["values": ["customColor": customColor]]), true)
+        ]
+    }
+
+    private func customChoice(_ configuration: Any, encodedOptions: Any? = nil, linked: Bool = false) -> WallpaperStoreChoice? {
+        let entry = colorContent(configuration: configuration, encodedOptions: encodedOptions, linked: linked)
+        return WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": entry], displayUUID: nil)
+    }
+
+    private func linkedCustomChoice(customColor: Any) -> WallpaperStoreChoice? {
+        linkedCustomChoice(
+            configuration: binaryPlist(["type": "customColor"]),
+            encodedValues: binaryPlist(["values": ["customColor": customColor]])
+        )
+    }
+
+    private func linkedCustomChoice(encodedValues: Any) -> WallpaperStoreChoice? {
+        linkedCustomChoice(configuration: binaryPlist(["type": "customColor"]), encodedValues: encodedValues)
+    }
+
+    private func linkedCustomChoice(configuration: Any, encodedValues: Any) -> WallpaperStoreChoice? {
+        let entry = colorContent(configuration: configuration, encodedOptions: encodedValues, linked: true)
+        return WallpaperStoreIndex.choice(in: ["Displays": ["MAIN-display": entry]], displayUUID: "main-display")
+    }
+
+    private func colorContent(configuration: Any, encodedOptions: Any?, linked: Bool) -> [String: Any] {
+        var content: [String: Any] = [
+            "Choices": [[
+                "Provider": WallpaperStoreIndex.colorProvider,
+                "Configuration": configuration
+            ] as [String: Any]] as [Any]
+        ]
+        if let encodedOptions {
+            content["EncodedOptionValues"] = encodedOptions
+        }
+        let key = linked ? "Linked" : "Desktop"
+        return [key: ["Content": content]]
+    }
+
+    private func xmlPlist(_ object: [String: Any]) -> String {
+        String(data: xmlPlistData(object), encoding: .utf8) ?? ""
+    }
+
+    private func xmlPlistData(_ object: [String: Any]) -> Data {
+        try! PropertyListSerialization.data(fromPropertyList: object, format: .xml, options: 0)
+    }
+
     private func fileURL(_ path: String) -> String {
         URL(fileURLWithPath: path).absoluteString
     }
