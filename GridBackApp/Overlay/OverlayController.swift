@@ -1,5 +1,6 @@
 import Accelerate
 import AppKit
+@preconcurrency import AVFoundation
 import GridBackCore
 import ImageIO
 import os
@@ -30,6 +31,10 @@ final class OverlayController: NSObject {
     /// Last decision written to the log, so one open records one line.
     private var loggedDecision = ""
     private var loggedGeneration = -1
+    /// Aerial grab still running. Closing the grid does not start a second one.
+    private var aerialInFlightKey: String?
+    /// A grab that produced no frame. Relayout does not retry it; the next open does.
+    private var aerialFailedKey: String?
     private var loggedSolidColorNames = false
     /// System appearance last used for the blur. The grid window's own appearance is not this.
     private var lastSystemAppearance: WallpaperAppearance?
@@ -124,6 +129,7 @@ final class OverlayController: NSObject {
         showGeneration += 1
         pictureKey = nil
         inflightPictureKey = nil
+        aerialFailedKey = nil
         stopDockWatch()
         dockBackdrop?.orderOut(nil)
         panel?.orderOut(nil)
@@ -289,18 +295,25 @@ final class OverlayController: NSObject {
 
     /// Prepares the blur before the grid opens. Opening the grid already re-reads
     /// the wallpaper, so this runs at launch and when Light or Dark changes.
+    /// An Aerial frame is grabbed here too, so a later open can use the cache.
     private func prewarmPicture() {
         guard !wantsGrid, let screen = PrimaryDisplay.screen() else { return }
         let job = DesktopPicture.job(on: screen)
         notePicture(job)
         preparedKey = job.cacheKey
         guard DesktopPicture.cached(job.cacheKey) == nil else { return }
+        if job.aerialAssetID != nil {
+            startAerialFrame(job, generation: showGeneration)
+            return
+        }
         startPictureRender(job, generation: showGeneration)
     }
 
     /// Shows the shared blurred picture. A cached picture is applied immediately.
-    /// A miss is rendered off the main thread, and the windows stay hidden until it arrives
+    /// A photo miss is rendered off the main thread, and the windows stay hidden until it arrives
     /// so the sharp wallpaper never flashes.
+    /// An Aerial miss shows the plain fallback immediately. The frame is grabbed
+    /// off the main thread and fades in when it is ready. `show()` does not wait.
     private func ensurePicture(generation: Int, on screen: NSScreen) {
         let job = DesktopPicture.job(on: screen)
         notePicture(job)
@@ -309,6 +322,19 @@ final class OverlayController: NSObject {
         if let image = DesktopPicture.cached(job.cacheKey) {
             applyPicture(image, job: job)
             revealGrid()
+            return
+        }
+        if job.aerialAssetID != nil {
+            if panel?.isVisible != true {
+                var holding = job
+                holding.url = nil
+                holding.aerialAssetID = nil
+                holding.kind = .fallback
+                holding.solidColor = WallpaperNeutralFill.color(for: job.appearance)
+                showSharedFill(holding.solidColor ?? WallpaperNeutralFill.color(for: holding.appearance), job: holding)
+                revealGrid()
+            }
+            startAerialFrame(job, generation: generation)
             return
         }
         startPictureRender(job, generation: generation)
@@ -328,6 +354,14 @@ final class OverlayController: NSObject {
             log.info("DesktopPicture solidColorNames=\(names.isEmpty ? "none" : names, privacy: .public)")
         }
         log.info("DesktopPicture source=\(job.source.rawValue, privacy: .public) provider=\(provider, privacy: .public) configKeys=\(keys, privacy: .public) kind=\(job.kind.rawValue, privacy: .public) appearance=\(job.appearance.rawValue, privacy: .public) reportedDefault=\(job.reportedSystemDefault, privacy: .public) colorValues=\(colors, privacy: .public)")
+        if job.provider == WallpaperStoreIndex.aerialsProvider {
+            let recordLine = WallpaperAerialLog.recordLine(
+                record: job.aerialRecord,
+                provider: job.provider,
+                keys: job.configKeys
+            )
+            log.info("DesktopPicture aerial \(recordLine, privacy: .public)")
+        }
         if !job.urlLog.isEmpty {
             log.info("DesktopPicture \(job.urlLog, privacy: .public)")
         }
@@ -369,6 +403,61 @@ final class OverlayController: NSObject {
             let applyGeneration = self.pictureKey == key ? self.showGeneration : generation
             self.presentWallpaper(
                 hasPicture: image != nil,
+                image: image,
+                job: job,
+                generation: applyGeneration,
+                cacheKey: key
+            )
+        }
+    }
+
+    /// Grabs one Aerial frame off the main thread, blurs it, and keeps only that image.
+    /// A miss leaves the fallback that `show()` already put up.
+    private func startAerialFrame(_ job: DesktopPictureJob, generation: Int) {
+        let key = job.cacheKey
+        guard let url = job.url, url.isFileURL else { return }
+        guard aerialInFlightKey != key, aerialFailedKey != key else { return }
+        aerialInFlightKey = key
+        inflightPictureKey = key
+        log.info("DesktopPicture aerial schedule main=\(Thread.isMainThread, privacy: .public)")
+        OffMainWork.start {
+            let onMain = Thread.isMainThread
+            let qos = Int(qos_class_self().rawValue)
+            let started = DispatchTime.now().uptimeNanoseconds
+            let maxPixel = WallpaperRenderSize.make(
+                pixelWidth: job.pixelWidth,
+                pixelHeight: job.pixelHeight,
+                pointHeight: Double(job.pointSize.height)
+            ).maxPixelSize
+            let frame = AerialFrameGrabber.blockingFrame(fileURL: url, maxPixelSize: maxPixel)
+            let image = frame.flatMap { DesktopPicture.render(job, frame: $0) }
+            let milliseconds = Int((DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000)
+            return (onMain, qos, milliseconds, image)
+        } apply: { [weak self] result in
+            guard let self else { return }
+            if self.inflightPictureKey == key {
+                self.inflightPictureKey = nil
+            }
+            if self.aerialInFlightKey == key {
+                self.aerialInFlightKey = nil
+            }
+            let (renderedOnMain, qos, milliseconds, cgImage) = result
+            self.log.info("DesktopPicture aerial render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
+            guard let cgImage else {
+                self.aerialFailedKey = key
+                return
+            }
+            let image = NSImage(cgImage: cgImage, size: job.pointSize)
+            if WallpaperPictureStore.shouldKeep(
+                hasPicture: true,
+                completedCacheKey: key,
+                currentCacheKey: self.preparedKey ?? ""
+            ) {
+                DesktopPicture.store(image, key: key)
+            }
+            let applyGeneration = self.pictureKey == key ? self.showGeneration : generation
+            self.presentWallpaper(
+                hasPicture: true,
                 image: image,
                 job: job,
                 generation: applyGeneration,
@@ -587,6 +676,10 @@ struct DesktopPictureJob {
     var matchLog: String = ""
     var structureLog: String = ""
     var solidColor: WallpaperSolidColor?
+    /// Set when a local Aerial movie is ready to grab. The cache token is this id, not a path.
+    var aerialAssetID: String?
+    /// `Desktop` or `Linked` when the provider is Aerials.
+    var aerialRecord: String = ""
     var pointSize: NSSize
     var pixelWidth: Int
     var pixelHeight: Int
@@ -596,6 +689,64 @@ struct DesktopPictureJob {
     var screenHeight: Double
 
     var prefersPlainBlur: Bool { url == nil && solidColor == nil }
+}
+
+/// One still from a local Aerial movie. A remote URL is refused before any asset is made.
+/// The asset and the generator are released when the grab returns.
+enum AerialFrameGrabber {
+    static func blockingFrame(fileURL: URL, maxPixelSize: Int) -> CGImage? {
+        guard isLocalMovie(fileURL) else { return nil }
+        let gate = FrameGate()
+        Task.detached(priority: .medium) {
+            let image = await frame(fileURL: fileURL, maxPixelSize: maxPixelSize)
+            gate.finish(image)
+        }
+        return gate.wait()
+    }
+
+    private static func frame(fileURL: URL, maxPixelSize: Int) async -> CGImage? {
+        guard isLocalMovie(fileURL) else { return nil }
+        let asset = AVURLAsset(url: fileURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let side = CGFloat(max(maxPixelSize, 1))
+        generator.maximumSize = CGSize(width: side, height: side)
+        let slack = CMTime(seconds: 2, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = slack
+        generator.requestedTimeToleranceAfter = slack
+        do {
+            let duration = try await asset.load(.duration)
+            guard duration.isNumeric else { return nil }
+            let seconds = duration.seconds * WallpaperAerialCatalogue.frameFraction
+            guard seconds.isFinite, seconds >= 0 else { return nil }
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            let generated = try await generator.image(at: time)
+            return generated.image
+        } catch {
+            return nil
+        }
+    }
+
+    private static func isLocalMovie(_ url: URL) -> Bool {
+        guard url.isFileURL, url.scheme?.lowercased() == "file" else { return false }
+        if let host = url.host, !host.isEmpty, host.caseInsensitiveCompare("localhost") != .orderedSame {
+            return false
+        }
+        return url.lastPathComponent.lowercased().hasSuffix(".mov")
+    }
+
+    private final class FrameGate: @unchecked Sendable {
+        private let semaphore = DispatchSemaphore(value: 0)
+        private var image: CGImage?
+        func finish(_ image: CGImage?) {
+            self.image = image
+            semaphore.signal()
+        }
+        func wait() -> CGImage? {
+            semaphore.wait()
+            return image
+        }
+    }
 }
 
 enum DesktopPicture {
@@ -614,8 +765,9 @@ enum DesktopPicture {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
     }
 
-    /// The blur for the wallpaper on this screen. A moving or time-of-day wallpaper
-    /// has no single frame, so the job asks for the plain blur instead.
+    /// The blur for the wallpaper on this screen. A time-of-day photo has no single
+    /// frame, so the job asks for the plain blur. A downloaded Aerial uses one
+    /// frame of the local movie. A missing movie stays the plain blur.
     /// A sandboxed build cannot read the wallpaper store, and then only a plain
     /// photo URL is used.
     static func job(on screen: NSScreen) -> DesktopPictureJob {
@@ -710,11 +862,14 @@ enum DesktopPicture {
         } else {
             urlLog = ""
         }
+        let aerial = WallpaperAerialFiles.resolution(for: choice)
         let matchLog: String
         if choice?.provider == WallpaperStoreIndex.colorProvider {
             let name = choice?.systemColorName ?? "none"
             let matched = choice?.systemColorName != nil && choice?.solidColor != nil
             matchLog = "matched=\(matched) name=\(name)"
+        } else if choice?.provider == WallpaperStoreIndex.aerialsProvider {
+            matchLog = aerial.matchLog
         } else {
             matchLog = ""
         }
@@ -762,12 +917,31 @@ enum DesktopPicture {
                 token = "neutral"
             }
         }
+        var shownAerial: String?
+        if choice?.provider == WallpaperStoreIndex.aerialsProvider {
+            if let movie = aerial.movie, movie.isFileURL, let assetID = aerial.assetID {
+                kind = .still
+                url = movie
+                imageIndex = 0
+                color = nil
+                token = assetID
+                shownAerial = assetID
+            } else {
+                kind = .fallback
+                url = nil
+                imageIndex = 0
+                color = WallpaperNeutralFill.color(for: appearance)
+                token = "neutral"
+            }
+        }
         return DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
                 token: token,
                 pixelWidth: pixelW,
                 pixelHeight: pixelH,
-                appearance: appearance,
+                // The Aerial still does not depend on Light or Dark, so the cache
+                // stays warm when the system appearance changes.
+                appearance: shownAerial == nil ? appearance : .light,
                 kind: kind,
                 imageIndex: url == nil ? nil : imageIndex,
                 storeModified: stored.modified
@@ -785,6 +959,8 @@ enum DesktopPicture {
             matchLog: matchLog,
             structureLog: choice?.structureLog ?? "",
             solidColor: color,
+            aerialAssetID: shownAerial,
+            aerialRecord: aerial.record,
             pointSize: screen.frame.size,
             pixelWidth: pixelW,
             pixelHeight: pixelH,
@@ -857,7 +1033,8 @@ enum DesktopPicture {
     /// Blurs the desktop picture on the calling thread.
     /// The picture is decoded up front at a quarter of the screen, so drawing it does not
     /// decode a full-size image. The blur radius uses that same scale. Core Image is not used.
-    static func render(_ job: DesktopPictureJob) -> CGImage? {
+    /// `frame` is an Aerial still that was already grabbed. Passing it skips ImageIO.
+    static func render(_ job: DesktopPictureJob, frame supplied: CGImage? = nil) -> CGImage? {
         let interval = signposter.beginInterval("WallpaperRender")
         defer { signposter.endInterval("WallpaperRender", interval) }
         let plan = WallpaperRenderSize.make(
@@ -880,7 +1057,7 @@ enum DesktopPicture {
             bitmapInfo: bitmapInfo
         ), let pixels = context.data else { return nil }
         context.interpolationQuality = .medium
-        if let color = job.solidColor {
+        if supplied == nil, let color = job.solidColor {
             context.setFillColor(CGColor(
                 srgbRed: CGFloat(color.red),
                 green: CGFloat(color.green),
@@ -891,10 +1068,7 @@ enum DesktopPicture {
             // Same veil the ink decision used for this fill.
             let veil = InkContrast.forFill(color).veil
             return dimmed(context, width: width, height: height, veil: veil)
-        } else if let url = job.url {
-            guard let wallpaper = decodedThumbnail(at: url, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) else {
-                return nil
-            }
+        } else if let wallpaper = supplied ?? job.url.flatMap({ decodedThumbnail(at: $0, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) }) {
             let srcW = CGFloat(wallpaper.width)
             let srcH = CGFloat(wallpaper.height)
             guard srcW > 0, srcH > 0 else { return nil }
@@ -1151,6 +1325,60 @@ enum WallpaperSolidColors {
             return nil
         }
         return (directory as NSString).appendingPathComponent(file)
+    }
+}
+
+/// The Aerial catalogue and the downloaded movies. Nothing here is logged.
+enum WallpaperAerialFiles {
+    struct Resolution {
+        var assetID: String?
+        var record: String
+        var movie: URL?
+        var matchLog: String
+    }
+
+    static func resolution(for choice: WallpaperStoreChoice?) -> Resolution {
+        guard choice?.provider == WallpaperStoreIndex.aerialsProvider else {
+            return Resolution(assetID: nil, record: "", movie: nil, matchLog: "")
+        }
+        let catalogue: Any? = choice?.aerialAssetID == nil && choice?.aerialSubcategory != nil ? loadCatalogue() : nil
+        let assetID = WallpaperAerialCatalogue.resolvedAssetID(
+            storedAssetID: choice?.aerialAssetID,
+            subcategory: choice?.aerialSubcategory,
+            catalogue: catalogue
+        )
+        let movie = WallpaperAerialCatalogue.localMovie(assetID: assetID, videosDirectory: videosDirectory())
+        return Resolution(
+            assetID: assetID,
+            record: choice?.aerialRecord ?? "",
+            movie: movie,
+            matchLog: WallpaperAerialLog.matchLine(matched: movie != nil, assetID: assetID)
+        )
+    }
+
+    private static var cachedCatalogue: (stamp: TimeInterval, value: Any?)?
+
+    private static func videosDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos", isDirectory: true)
+    }
+
+    private static func loadCatalogue() -> Any? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/manifest/entries.json")
+        let stamp = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate?.timeIntervalSince1970 ?? 0
+        if let cached = cachedCatalogue, cached.stamp == stamp, stamp != 0 {
+            return cached.value
+        }
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+        if stamp != 0 {
+            cachedCatalogue = (stamp, object)
+        }
+        return object
     }
 }
 
