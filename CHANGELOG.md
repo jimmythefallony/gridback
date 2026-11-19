@@ -4,6 +4,7 @@
 
 - Idle CPU in the open summary uses gaps of a minute or longer. Each open records how long the grid stayed closed, and the average over every gap is still shown.
 - A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.
+- An Aerial desktop shows a blurred frame of that scene. A Shuffle or time-of-day Aerial updates the next time the grid opens.
 - GridBack writes how fast the grid opened, and the CPU and memory around that open, to this Mac's log.
 
 ## v0.3.7 (2026-11-18)

@@ -2,7 +2,7 @@ import CoreFoundation
 import Foundation
 
 /// How the desktop picture behind the grid should be chosen.
-/// Time-of-day and moving wallpapers are not a single frame GridBack can name.
+/// A time-of-day photo is not one frame. A downloaded Aerial can supply one frame from its local movie.
 public enum WallpaperKind: String, Equatable, Sendable {
     case still
     case lightDark
@@ -159,6 +159,12 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
     public var locationBlocked: Bool
     /// When the store file cannot be read, a real legacy photo URL may be used.
     public var allowLegacy: Bool
+    /// Aerial asset id from the choice, when the store named one. Not a path.
+    public var aerialAssetID: String?
+    /// Aerial subcategory id, when the store named no asset. Not a path.
+    public var aerialSubcategory: String?
+    /// `Desktop` or `Linked` for an Aerial. Empty for every other provider.
+    public var aerialRecord: String
 
     public init(
         provider: String,
@@ -176,7 +182,10 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
         structureLog: String = "",
         archivedColor: Data? = nil,
         locationBlocked: Bool = false,
-        allowLegacy: Bool = true
+        allowLegacy: Bool = true,
+        aerialAssetID: String? = nil,
+        aerialSubcategory: String? = nil,
+        aerialRecord: String = ""
     ) {
         self.provider = provider
         self.configKeys = configKeys
@@ -194,6 +203,9 @@ public struct WallpaperStoreChoice: Equatable, Sendable {
         self.archivedColor = archivedColor
         self.locationBlocked = locationBlocked
         self.allowLegacy = allowLegacy
+        self.aerialAssetID = aerialAssetID
+        self.aerialSubcategory = aerialSubcategory
+        self.aerialRecord = aerialRecord
     }
 }
 
@@ -239,7 +251,8 @@ public enum WallpaperStoreIndex {
 
     static func choice(inEntry entry: [String: Any]) -> WallpaperStoreChoice? {
         // `Desktop` is this display's own choice. `Linked` is that choice when
-        // it is shared by every Space. Only a colour is read from `Linked`.
+        // it is shared by every Space. A colour or an Aerial is read from
+        // `Linked`. A picture is not. `Idle` is the screen saver and is never read.
         guard let holder = contentHolder(in: entry),
               let content = holder.root["Content"] as? [String: Any],
               let choices = elements(content["Choices"]),
@@ -248,7 +261,7 @@ public enum WallpaperStoreIndex {
               !provider.isEmpty else {
             return nil
         }
-        if holder.linkedOnly && provider != colorProvider { return nil }
+        if holder.linkedOnly && provider != colorProvider && provider != aerialsProvider { return nil }
         let configuration = decodePropertyList(first["Configuration"]) ?? [:]
         let keys = configuration.keys.filter(isSafeKeyName).sorted()
         let folder = provider == imageFolderProvider
@@ -272,6 +285,9 @@ public enum WallpaperStoreIndex {
                 configuration: configuration
             )
             : WallpaperStructureProbe.Result(line: "", archive: nil)
+        let aerial = provider == aerialsProvider
+            ? aerialIdentifiers(configuration: configuration, content: content)
+            : (assetID: nil, subcategory: nil)
         return WallpaperStoreChoice(
             provider: provider,
             configKeys: keys,
@@ -286,22 +302,75 @@ public enum WallpaperStoreIndex {
             urlShape: parsed.shape,
             filesCount: parsed.filesCount,
             structureLog: probe.line,
-            archivedColor: probe.archive
+            archivedColor: probe.archive,
+            aerialAssetID: aerial.assetID,
+            aerialSubcategory: aerial.assetID == nil ? aerial.subcategory : nil,
+            aerialRecord: provider == aerialsProvider ? holder.record : ""
         )
     }
 
     /// The desktop record, and whether it came from the shared `Linked` choice.
+    /// `Idle` is intentionally absent: that entry is the screen saver.
     private struct ContentHolder {
         var root: [String: Any]
         var linkedOnly: Bool
+        var record: String
     }
 
     private static func contentHolder(in entry: [String: Any]) -> ContentHolder? {
         if let desktop = entry["Desktop"] as? [String: Any] {
-            return ContentHolder(root: desktop, linkedOnly: false)
+            return ContentHolder(root: desktop, linkedOnly: false, record: "Desktop")
         }
         if let linked = entry["Linked"] as? [String: Any] {
-            return ContentHolder(root: linked, linkedOnly: true)
+            return ContentHolder(root: linked, linkedOnly: true, record: "Linked")
+        }
+        return nil
+    }
+
+    /// `assetID` in the configuration wins. A subcategory there is next. The
+    /// encoded options beside the choice are used only when the configuration
+    /// names neither. Data and text are opened with `decodePropertyList`, and
+    /// the walk stops at the same depth as a custom colour.
+    private static func aerialIdentifiers(
+        configuration: [String: Any],
+        content: [String: Any]
+    ) -> (assetID: String?, subcategory: String?) {
+        if let assetID = findToken("assetID", in: configuration, depth: 0) {
+            return (assetID, nil)
+        }
+        if let subcategory = findToken("subcategory", in: configuration, depth: 0) {
+            return (nil, subcategory)
+        }
+        guard let options = decodePropertyList(content["EncodedOptionValues"]) else {
+            return (nil, nil)
+        }
+        if let assetID = findToken("assetID", in: options, depth: 0) {
+            return (assetID, nil)
+        }
+        if let subcategory = findToken("subcategory", in: options, depth: 0) {
+            return (nil, subcategory)
+        }
+        return (nil, nil)
+    }
+
+    /// A short token with no path characters. Anything else is not an id.
+    private static func findToken(_ key: String, in value: Any?, depth: Int) -> String? {
+        if depth > 8 { return nil }
+        if value is Data || value is String {
+            guard let expanded = decodePropertyList(value) else { return nil }
+            return findToken(key, in: expanded, depth: depth + 1)
+        }
+        if let dictionary = value as? [String: Any] {
+            if let token = WallpaperAerialCatalogue.safeToken(dictionary[key]) { return token }
+            for name in dictionary.keys.sorted() {
+                if let found = findToken(key, in: dictionary[name], depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        if let list = elements(value) {
+            for item in list {
+                if let found = findToken(key, in: item, depth: depth + 1) { return found }
+            }
         }
         return nil
     }
@@ -1004,10 +1073,124 @@ public enum WallpaperDim {
     public static let black = 0.25
 }
 
+/// One local Aerial movie. Remote addresses in the catalogue are ignored.
+/// The video file is always `videos/<assetID>.mov` under the directory the caller passes.
+public enum WallpaperAerialCatalogue {
+    /// How far into the movie the still is taken.
+    public static let frameFraction = 0.25
+
+    /// A stored asset id wins. A subcategory is mapped through the catalogue.
+    /// An unknown subcategory, or a value that is not a short token, is nil.
+    public static func resolvedAssetID(storedAssetID: String?, subcategory: String?, catalogue: Any?) -> String? {
+        if let storedAssetID {
+            return safeToken(storedAssetID)
+        }
+        guard let subcategory = safeToken(subcategory) else { return nil }
+        return representativeAssetID(forSubcategory: subcategory, in: catalogue)
+    }
+
+    public static func representativeAssetID(forSubcategory subcategory: String, in catalogue: Any?) -> String? {
+        guard let wanted = safeToken(subcategory), let root = jsonObject(catalogue) else { return nil }
+        guard let categories = root["categories"] as? [Any] else { return nil }
+        for category in categories {
+            guard let category = category as? [String: Any],
+                  let subs = category["subcategories"] as? [Any] else { continue }
+            for item in subs {
+                guard let sub = item as? [String: Any], safeToken(sub["id"]) == wanted else { continue }
+                return safeToken(sub["representativeAssetID"])
+            }
+        }
+        return nil
+    }
+
+    /// File URLs for the assets in a catalogue. An `https` entry is not returned.
+    public static func localVideoURLs(in catalogue: Any?, videosDirectory: URL) -> [URL] {
+        guard let root = jsonObject(catalogue), let assets = root["assets"] as? [Any] else { return [] }
+        var urls: [URL] = []
+        var seen = Set<String>()
+        for asset in assets {
+            guard let asset = asset as? [String: Any],
+                  let id = safeToken(asset["id"]),
+                  seen.insert(id).inserted,
+                  let url = localVideoURL(assetID: id, videosDirectory: videosDirectory) else { continue }
+            urls.append(url)
+        }
+        return urls
+    }
+
+    public static func localVideoURL(assetID: String, videosDirectory: URL) -> URL? {
+        guard videosDirectory.isFileURL, videosDirectory.scheme?.lowercased() == "file" else { return nil }
+        guard let assetID = safeToken(assetID) else { return nil }
+        let url = videosDirectory.appendingPathComponent(assetID + ".mov", isDirectory: false)
+        guard url.isFileURL, url.scheme?.lowercased() == "file", url.lastPathComponent == assetID + ".mov" else {
+            return nil
+        }
+        return url
+    }
+
+    /// The local movie when it is already on disk. A missing file is nil, and nothing is downloaded.
+    public static func localMovie(assetID: String?, videosDirectory: URL) -> URL? {
+        guard let assetID, let url = localVideoURL(assetID: assetID, videosDirectory: videosDirectory) else {
+            return nil
+        }
+        var directory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), !directory.boolValue else {
+            return nil
+        }
+        guard FileManager.default.isReadableFile(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// A missing movie, an unknown id, or no id is the plain fallback.
+    public static func kind(assetID: String?, videosDirectory: URL) -> WallpaperKind {
+        localMovie(assetID: assetID, videosDirectory: videosDirectory) == nil ? .fallback : .still
+    }
+
+    public static func safeToken(_ value: Any?) -> String? {
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
+        for scalar in trimmed.unicodeScalars {
+            let allowed = CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_"
+            if !allowed { return nil }
+        }
+        return trimmed
+    }
+
+    private static func jsonObject(_ catalogue: Any?) -> [String: Any]? {
+        if let dictionary = catalogue as? [String: Any] { return dictionary }
+        if let data = catalogue as? Data,
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return object
+        }
+        return nil
+    }
+}
+
+public enum WallpaperAerialLog {
+    /// Which store record supplied the Aerial. Keys and the provider only.
+    public static func recordLine(record: String, provider: String, keys: [String]) -> String {
+        let safeRecord = record == "Desktop" || record == "Linked" ? record : "none"
+        let safeProvider = provider.contains("/") || provider.contains("~") || provider.contains("..") || provider.count > 80
+            ? "redacted"
+            : provider
+        return "record=\(safeRecord) provider=\(safeProvider) keys=\(WallpaperLogName.configKeys(keys))"
+    }
+
+    /// `matched` and, when it is a short token, the asset id. Never a path.
+    public static func matchLine(matched: Bool, assetID: String?) -> String {
+        let flag = matched ? "true" : "false"
+        guard let assetID, let token = WallpaperAerialCatalogue.safeToken(assetID) else {
+            return "matched=\(flag)"
+        }
+        return "matched=\(flag) assetID=\(token)"
+    }
+}
+
 public enum WallpaperChoicePolicy {
     /// Only the image provider's file is opened. A colour provider uses a mapped
-    /// colour. Every other stored provider, including Aerials, is
-    /// `aerialOrUnknown` and does not use the legacy picture URL.
+    /// colour. Aerials do not use the legacy picture URL; a local movie is chosen
+    /// separately. Every other stored provider is `aerialOrUnknown`.
     /// A store file that exists but cannot be read is a known limit: the legacy
     /// URL is not used to get around that. A missing store file may use the legacy URL.
     /// The placeholder `DefaultDesktop` file is never treated as the user's choice.

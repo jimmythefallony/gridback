@@ -1388,6 +1388,170 @@ final class WallpaperClassificationTests: XCTestCase {
         )
     }
 
+    func testAerialChoiceKeepsTheAssetIDFromDesktopAndFromLinked() {
+        let desktop = aerialChoice(record: "Desktop", configuration: ["assetID": "CITY-1"])
+        XCTAssertEqual(desktop?.provider, WallpaperStoreIndex.aerialsProvider)
+        XCTAssertEqual(desktop?.aerialAssetID, "CITY-1")
+        XCTAssertEqual(desktop?.aerialRecord, "Desktop")
+        XCTAssertNil(desktop?.imageFilePath)
+        XCTAssertEqual(
+            WallpaperChoicePolicy.resolve(choice: desktop, workspacePath: "/Library/Desktop Pictures/Other.heic", imageFileReadable: true).use,
+            .plainBlur
+        )
+
+        let linked = aerialChoice(record: "Linked", configuration: binaryPlist(["assetID": "LINKED-1"]))
+        XCTAssertEqual(linked?.provider, WallpaperStoreIndex.aerialsProvider)
+        XCTAssertEqual(linked?.aerialAssetID, "LINKED-1")
+        XCTAssertEqual(linked?.aerialRecord, "Linked")
+
+        let linkedPicture = aerialChoice(
+            record: "Linked",
+            configuration: binaryPlist(["url": fileURL("/Library/Desktop Pictures/Still.jpg")]),
+            provider: WallpaperStoreIndex.imageProvider
+        )
+        XCTAssertNil(linkedPicture)
+
+        var both = aerialEntry(record: "Desktop", configuration: ["assetID": "DESK"])
+        both["Linked"] = aerialEntry(record: "Linked", configuration: ["assetID": "LINK"])["Linked"]
+        both["Idle"] = aerialEntry(record: "Desktop", configuration: ["assetID": "IDLE"])["Desktop"]
+        let winner = WallpaperStoreIndex.choice(in: ["Displays": ["main-display": both]], displayUUID: "main-display")
+        XCTAssertEqual(winner?.aerialAssetID, "DESK")
+        XCTAssertEqual(winner?.aerialRecord, "Desktop")
+
+        let idleOnly = ["Idle": aerialEntry(record: "Desktop", configuration: ["assetID": "IDLE"])["Desktop"] as Any]
+        XCTAssertNil(WallpaperStoreIndex.choice(in: ["Displays": ["main-display": idleOnly]], displayUUID: "main-display"))
+        XCTAssertNil(WallpaperStoreIndex.choice(in: ["AllSpacesAndDisplays": ["Idle": ["Content": [:]]]], displayUUID: nil))
+    }
+
+    func testAerialAssetIDIsReadFromConfigurationAndFromEncodedOptions() {
+        let direct = aerialChoice(record: "Desktop", configuration: binaryPlist(["assetID": "FROM-CONFIG"]))
+        XCTAssertEqual(direct?.aerialAssetID, "FROM-CONFIG")
+        XCTAssertNil(direct?.aerialSubcategory)
+
+        let nested = aerialChoice(record: "Desktop", configuration: ["values": ["assetID": "NESTED-1"]])
+        XCTAssertEqual(nested?.aerialAssetID, "NESTED-1")
+
+        let fromOptions = aerialChoice(
+            record: "Desktop",
+            configuration: binaryPlist(["type": "aerial"]),
+            encodedOptions: binaryPlist(["values": ["assetID": "FROM-OPTIONS"]])
+        )
+        XCTAssertEqual(fromOptions?.aerialAssetID, "FROM-OPTIONS")
+
+        let configWins = aerialChoice(
+            record: "Linked",
+            configuration: ["assetID": "CONFIG-WINS"],
+            encodedOptions: ["assetID": "OPTIONS-LOSE"]
+        )
+        XCTAssertEqual(configWins?.aerialAssetID, "CONFIG-WINS")
+        XCTAssertEqual(configWins?.aerialRecord, "Linked")
+    }
+
+    func testAerialSubcategoryCatalogueLogsAndMissingMovie() {
+        let remote = "https://example.com/sea.mov"
+        let catalogue: [String: Any] = [
+            "assets": [
+                ["id": "SEA-1", "url-4K-SDR-240FPS": remote, "previewImage": "https://example.com/sea.jpg"],
+                ["id": "CITY-2", "url-4K-HDR": "https://example.com/city.mov"]
+            ],
+            "categories": [
+                [
+                    "id": "places",
+                    "previewImage": "https://example.com/places.jpg",
+                    "subcategories": [
+                        ["id": "ocean", "representativeAssetID": "SEA-1", "previewImage": remote]
+                    ]
+                ]
+            ]
+        ]
+        let stored = aerialChoice(record: "Desktop", configuration: ["subcategory": "ocean"])
+        XCTAssertNil(stored?.aerialAssetID)
+        XCTAssertEqual(stored?.aerialSubcategory, "ocean")
+        XCTAssertEqual(
+            WallpaperAerialCatalogue.resolvedAssetID(
+                storedAssetID: stored?.aerialAssetID,
+                subcategory: stored?.aerialSubcategory,
+                catalogue: catalogue
+            ),
+            "SEA-1"
+        )
+        let catalogueData = try? JSONSerialization.data(withJSONObject: catalogue)
+        XCTAssertEqual(
+            WallpaperAerialCatalogue.representativeAssetID(forSubcategory: "ocean", in: catalogueData),
+            "SEA-1"
+        )
+        XCTAssertNil(WallpaperAerialCatalogue.resolvedAssetID(storedAssetID: nil, subcategory: "no-such", catalogue: catalogue))
+        XCTAssertNil(WallpaperAerialCatalogue.resolvedAssetID(storedAssetID: nil, subcategory: "ocean", catalogue: ["assets": []]))
+        XCTAssertNil(WallpaperAerialCatalogue.resolvedAssetID(storedAssetID: "/Users/example/secret", subcategory: "ocean", catalogue: catalogue))
+
+        let videos = URL(fileURLWithPath: "/Library/GridBack Aerial Fixture", isDirectory: true)
+        let urls = WallpaperAerialCatalogue.localVideoURLs(in: catalogue, videosDirectory: videos)
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["SEA-1.mov", "CITY-2.mov"])
+        XCTAssertTrue(urls.allSatisfy { $0.isFileURL && $0.scheme == "file" })
+        let joined = urls.map(\.absoluteString).joined(separator: " ")
+        XCTAssertFalse(joined.contains("https"))
+        XCTAssertFalse(joined.contains("http"))
+        XCTAssertFalse(joined.contains("example.com"))
+        XCTAssertFalse(joined.contains("/Users/"))
+        let sea = WallpaperAerialCatalogue.localVideoURL(assetID: "SEA-1", videosDirectory: videos)
+        XCTAssertEqual(sea?.isFileURL, true)
+        XCTAssertFalse(sea?.absoluteString.contains(remote) == true)
+        XCTAssertNil(WallpaperAerialCatalogue.localVideoURL(assetID: "../SEA-1", videosDirectory: videos))
+        XCTAssertNil(WallpaperAerialCatalogue.localVideoURL(assetID: "SEA-1", videosDirectory: URL(string: "https://example.com/videos")!))
+        XCTAssertTrue(WallpaperAerialCatalogue.localVideoURLs(in: catalogue, videosDirectory: URL(string: "https://example.com/videos")!).isEmpty)
+
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gridback-aerial-missing", isDirectory: true)
+        try? FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: missing.appendingPathComponent("SEA-1.mov"))
+        XCTAssertEqual(WallpaperAerialCatalogue.kind(assetID: "SEA-1", videosDirectory: missing), .fallback)
+        XCTAssertEqual(WallpaperAerialCatalogue.kind(assetID: nil, videosDirectory: missing), .fallback)
+        XCTAssertNil(WallpaperAerialCatalogue.localMovie(assetID: "SEA-1", videosDirectory: missing))
+        XCTAssertEqual(WallpaperAerialCatalogue.frameFraction, 0.25, accuracy: 0.000_1)
+
+        let record = WallpaperAerialLog.recordLine(
+            record: "Desktop",
+            provider: WallpaperStoreIndex.aerialsProvider,
+            keys: ["assetID", "subcategory"]
+        )
+        let matched = WallpaperAerialLog.matchLine(matched: true, assetID: "SEA-1")
+        let hidden = WallpaperAerialLog.matchLine(matched: false, assetID: "/Users/example/secret.mov")
+        let redacted = WallpaperAerialLog.recordLine(record: "Linked", provider: "/Users/example/evil", keys: ["/Users/example"])
+        let lines = [record, matched, hidden, redacted].joined(separator: "\n")
+        XCTAssertFalse(lines.contains("/Users/"))
+        XCTAssertFalse(lines.contains("example"))
+        XCTAssertTrue(record.contains("record=Desktop"))
+        XCTAssertTrue(record.contains("provider=\(WallpaperStoreIndex.aerialsProvider)"))
+        XCTAssertEqual(matched, "matched=true assetID=SEA-1")
+        XCTAssertEqual(hidden, "matched=false")
+        XCTAssertEqual(
+            Ink.forBackdrop(.picture, previous: .dark),
+            .light
+        )
+        XCTAssertEqual(
+            BackdropInkSource.resolve(hasPicture: true, isSolidColor: false, fill: WallpaperNeutralFill.color(for: .light)),
+            .picture
+        )
+    }
+
+    private func aerialChoice(record: String, configuration: Any, encodedOptions: Any? = nil, provider: String = WallpaperStoreIndex.aerialsProvider) -> WallpaperStoreChoice? {
+        let entry = aerialEntry(record: record, configuration: configuration, encodedOptions: encodedOptions, provider: provider)
+        return WallpaperStoreIndex.choice(in: ["Displays": ["MAIN-display": entry]], displayUUID: "main-display")
+    }
+
+    private func aerialEntry(record: String, configuration: Any, encodedOptions: Any? = nil, provider: String = WallpaperStoreIndex.aerialsProvider) -> [String: Any] {
+        var content: [String: Any] = [
+            "Choices": [[
+                "Provider": provider,
+                "Configuration": configuration
+            ] as [String: Any]] as [Any]
+        ]
+        if let encodedOptions {
+            content["EncodedOptionValues"] = encodedOptions
+        }
+        return [record: ["Content": content]]
+    }
+
     private func customFill(red: Int, green: Int, blue: Int) -> WallpaperSolidColor {
         let color: [String: Any] = [
             "color": [
