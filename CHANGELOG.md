@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.
+
 ## v0.3.7 (2026-11-18)
 
 - The plain fallback background follows Light and Dark: pale grey with dark text in Light, charcoal in Dark, and it fades across when you switch.
