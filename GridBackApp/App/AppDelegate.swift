@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
         MainMenu.install()
         model.delegate = self
         overlay.attach(model: model)
+        GridOpenTrace.prepare()
         let menu = MenuBarController(model: model)
         menuBar = menu
         installKeyMonitor()

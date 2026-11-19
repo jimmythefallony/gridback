@@ -12,6 +12,10 @@ This is version 0.3.7. It is open source, and it is not a finished product.
 
 No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 
+GridBack writes basic speed and memory numbers to the Mac's own log, which never leaves the Mac.
+
+To read a summary of those numbers, run ./scripts/perf-report.sh.
+
 ## What works
 
 ![A page of apps in GridBack](docs/images/gridback-grid.png)

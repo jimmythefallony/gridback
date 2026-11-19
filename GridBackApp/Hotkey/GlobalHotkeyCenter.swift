@@ -113,6 +113,9 @@ private func gridBackHotKeyCallback(
         return status
     }
     log.info("Hotkey pressed signature=\(identity.signature, privacy: .public) id=\(identity.id, privacy: .public)")
+    // Start the open interval here, before the hop to the main thread, and
+    // only when the grid is closed. A press that closes the grid does not.
+    GridOpenTrace.shared.hotkeyArrived()
     DispatchQueue.main.async {
         target.onPress()
     }
