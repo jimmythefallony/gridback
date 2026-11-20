@@ -797,7 +797,7 @@ public enum WallpaperURLParser {
     }
 }
 
-public enum WallpaperPathPlace: String, Equatable, Sendable {
+public enum WallpaperPathPlace: String, Codable, CaseIterable, Equatable, Sendable {
     case desktop
     case documents
     case downloads

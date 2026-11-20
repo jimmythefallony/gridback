@@ -22,6 +22,7 @@ final class FolderTests: XCTestCase {
         try Data(body.utf8).write(to: store.stateURL)
         let loaded = try XCTUnwrap(store.load())
         XCTAssertEqual(loaded.version, 2)
+        XCTAssertEqual(loaded.askedLocations, [])
         XCTAssertEqual(loaded.layout.orderedIDs, ["a", "b", "c"])
         XCTAssertTrue(loaded.layout.folders.isEmpty)
     }
