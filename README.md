@@ -12,7 +12,7 @@ This is version 0.3.7. It is open source, and it is not a finished product.
 
 No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 
-GridBack reads the wallpaper file only, and only after you allow it, so it can show a blurred copy behind your apps. Nothing leaves the Mac.
+To show a blurred copy behind your apps, GridBack reads your wallpaper file and nothing else. If the wallpaper is in Desktop, Documents, Downloads, iCloud Drive or on a removable disk, it asks you first. Nothing leaves the Mac.
 
 GridBack writes basic speed and memory numbers to the Mac's own log, which never leaves the Mac.
 
