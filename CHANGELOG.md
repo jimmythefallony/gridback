@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Groundwork for asking permission to show wallpapers from private folders. No visible change yet.
+- GridBack asks once before reading a wallpaper in Desktop, Documents, Downloads, iCloud Drive, or on a removable disk.
+- Groundwork for asking permission to show wallpapers from private folders.
 - Idle CPU in the open summary uses gaps of a minute or longer. Each open records how long the grid stayed closed, and the average over every gap is still shown.
 - A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.
 - An Aerial desktop shows a blurred frame of that scene. A Shuffle or time-of-day Aerial updates the next time the grid opens.

@@ -12,6 +12,8 @@ This is version 0.3.7. It is open source, and it is not a finished product.
 
 No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 
+GridBack reads the wallpaper file only, and only after you allow it, so it can show a blurred copy behind your apps. Nothing leaves the Mac.
+
 GridBack writes basic speed and memory numbers to the Mac's own log, which never leaves the Mac.
 
 To read a summary of those numbers, run ./scripts/perf-report.sh.
@@ -55,7 +57,7 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 ## Known issues
 
 - Wallpapers your account isn't allowed to read show a plain fallback that follows Light/Dark mode.
-- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive or external drives show a plain fallback that follows Light/Dark mode, because GridBack never asks for extra permissions.
+- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive, or on a removable disk show a plain fallback that follows Light/Dark mode until you allow GridBack to read that folder. Photos libraries, network disks, and system wallpapers stay on the plain fallback.
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
 

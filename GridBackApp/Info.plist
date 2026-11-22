@@ -26,8 +26,16 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 jimmythefallony. MIT License.</string>
 	<key>NSPrincipalClass</key>

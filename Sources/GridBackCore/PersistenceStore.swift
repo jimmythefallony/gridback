@@ -44,14 +44,15 @@ public struct PersistenceStore: Sendable {
                 try FileManager.default.moveItem(at: temporaryURL, to: stateURL)
             }
         } catch {
+            // The temporary file is not trusted after a failed replace: it may now
+            // hold the previous state. Write the bytes that were just encoded.
             if FileManager.default.fileExists(atPath: stateURL.path) {
                 try? FileManager.default.removeItem(at: stateURL)
             }
             if FileManager.default.fileExists(atPath: temporaryURL.path) {
-                try FileManager.default.moveItem(at: temporaryURL, to: stateURL)
-            } else {
-                try data.write(to: stateURL, options: [.atomic])
+                try? FileManager.default.removeItem(at: temporaryURL)
             }
+            try data.write(to: stateURL, options: [.atomic])
         }
     }
 
