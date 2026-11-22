@@ -44,6 +44,8 @@ final class GridBackModel: ObservableObject {
     weak var delegate: GridBackUIDelegate?
 
     private let store: PersistenceStore
+    /// Places the folder explainer has already been offered. Kept across layout saves.
+    private var askedLocations: [WallpaperPathPlace] = []
     private let catalog = AppCatalog()
     private let launcher = AppLauncher()
     private let hotkey = GlobalHotkeyCenter()
@@ -78,6 +80,7 @@ final class GridBackModel: ObservableObject {
         case .loaded(let state):
             layout = state.layout
             shortcut = state.shortcut
+            askedLocations = state.askedLocations
             hasSavedLayout = true
         case .missing:
             layout = Layout(pages: [], metrics: .classic)
@@ -539,7 +542,7 @@ final class GridBackModel: ObservableObject {
 
     private func save() {
         guard persistEnabled else { return }
-        let state = PersistedState(layout: layout, shortcut: shortcut)
+        let state = PersistedState(layout: layout, shortcut: shortcut, askedLocations: askedLocations)
         do {
             try store.save(state)
         } catch {
