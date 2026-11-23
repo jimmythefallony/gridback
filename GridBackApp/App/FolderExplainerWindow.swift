@@ -3,12 +3,12 @@ import GridBackCore
 import os
 import SwiftUI
 
-/// A small titled window that explains the folder ask. It is not the grid.
-/// Closing it is Not now: the place is remembered and is not offered again.
+/// A non-modal panel styled like a system alert. It is not the grid.
+/// Closing it is Not Now: the place is remembered and is not offered again.
 final class FolderExplainerController: NSObject, NSWindowDelegate {
     private var model: GridBackModel?
     private var overlay: OverlayController?
-    private var window: NSWindow?
+    private var window: NSPanel?
     private var shownPlace: WallpaperPathPlace?
     private var rememberedPath: String?
     /// True while the window is being hidden without an answer, including when the grid opens.
@@ -78,7 +78,8 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         if shownPlace == place, window?.isVisible == true { return }
         shownPlace = place
         let hosting = NSHostingController(rootView: FolderExplainerView(
-            message: FolderExplainerCopy.message(place: place),
+            title: FolderExplainerCopy.title,
+            message: FolderExplainerCopy.body(place: place) ?? "",
             allow: { [weak self] in self?.allow() },
             notNow: { [weak self] in self?.notNow() }
         ))
@@ -94,7 +95,8 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         self.window = window
         window.center()
         NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Once, when the panel is shown. Space changes do not activate again.
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -111,21 +113,26 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         return NSSize(width: chosen.width, height: chosen.height)
     }
 
-    private func makeWindow() -> NSWindow {
-        let window = NSWindow(
+    private func makeWindow() -> NSPanel {
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: CGFloat(FolderExplainerLayout.width), height: CGFloat(FolderExplainerLayout.minimumHeight)),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = String(localized: "GridBack")
-        window.isReleasedWhenClosed = false
-        window.isRestorable = false
-        window.delegate = self
-        window.level = .normal
-        // Follow the Space the user is on, including away from a full-screen app.
-        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        return window
+        panel.title = ""
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isReleasedWhenClosed = false
+        panel.isRestorable = false
+        panel.delegate = self
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = false
+        // Present on every Space, including the desktop and a full-screen app.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        return panel
     }
 
     private func allow() {
@@ -176,28 +183,45 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The explainer text and the two answers. The message names the folder kind, not a path.
+/// Alert-shaped content. VoiceOver reads the title, then the body, then the buttons.
 private struct FolderExplainerView: View {
+    var title: String
     var message: String
     var allow: () -> Void
     var notNow: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(message)
-                .font(.body)
+        VStack(spacing: 10) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 64, height: 64)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button(String(localized: "Not now"), action: notNow)
+                .accessibilityAddTraits(.isHeader)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(String(localized: "Not Now"), action: notNow)
                     .keyboardShortcut(.cancelAction)
-                Button(String(localized: "Allow"), action: allow)
+                Button(String(localized: "Continue"), action: allow)
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
+            .padding(.top, 6)
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
         .frame(width: CGFloat(FolderExplainerLayout.width))
         .fixedSize(horizontal: true, vertical: true)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -225,6 +249,7 @@ enum FolderVolumeKindProbe {
         let values = try? matched.resourceValues(forKeys: keys)
         if values?.volumeIsLocal == false { return .network }
         if values?.volumeIsRemovable == true { return .removable }
+        if values?.volumeIsLocal == true { return .fixed }
         return .none
     }
 }

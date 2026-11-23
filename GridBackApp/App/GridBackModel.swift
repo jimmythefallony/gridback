@@ -89,7 +89,11 @@ final class GridBackModel: ObservableObject {
         case .loaded(let state):
             layout = state.layout
             shortcut = state.shortcut
-            explainer = FolderExplainerSession(asked: state.askedLocations, granted: state.grantedLocations)
+            explainer = FolderExplainerSession(
+                asked: state.askedLocations,
+                granted: state.grantedLocations,
+                denied: state.deniedLocations
+            )
             hasSavedLayout = true
         case .missing:
             layout = Layout(pages: [], metrics: .classic)
@@ -157,9 +161,10 @@ final class GridBackModel: ObservableObject {
     }
 
     func noteFolderDenied(_ place: WallpaperPathPlace) {
-        let before = explainer.granted
+        let beforeGranted = explainer.granted
+        let beforeDenied = explainer.denied
         explainer.noteDenied(place)
-        guard explainer.granted != before else { return }
+        guard explainer.granted != beforeGranted || explainer.denied != beforeDenied else { return }
         save()
     }
 
@@ -611,7 +616,8 @@ final class GridBackModel: ObservableObject {
             layout: layout,
             shortcut: shortcut,
             askedLocations: explainer.askedList,
-            grantedLocations: explainer.grantedList
+            grantedLocations: explainer.grantedList,
+            deniedLocations: explainer.deniedList
         )
         do {
             try store.save(state)

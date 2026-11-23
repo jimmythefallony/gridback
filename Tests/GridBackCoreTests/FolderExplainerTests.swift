@@ -5,10 +5,12 @@ final class FolderExplainerTests: XCTestCase {
     func testExplainerIsOfferedOncePerAskablePlace() {
         for place in WallpaperPathPlace.allCases {
             var session = FolderExplainerSession()
-            let kinds: [FolderVolumeKind] = place == .volumes ? [.none, .removable, .network] : [.none]
+            let kinds: [FolderVolumeKind] = place == .volumes ? [.none, .removable, .network, .fixed] : [.none]
             for volumeKind in kinds {
                 let step = session.note(place: place, volumeKind: volumeKind, gridClosed: true, dragActive: false)
-                let askable = FolderAccessRules.askable.contains(place) && volumeKind != .network
+                let askable = FolderAccessRules.askable.contains(place)
+                    && volumeKind != .network
+                    && volumeKind != .fixed
                 if askable {
                     XCTAssertEqual(step, .show(place), "place=\(place.rawValue) volume=\(volumeKind.rawValue)")
                     XCTAssertEqual(session.pending, place)
@@ -147,20 +149,20 @@ final class FolderExplainerTests: XCTestCase {
     }
 
     func testExplainerSizeStaysCompactOnEveryShow() {
-        let fitted = FolderExplainerLayout.size(measuredWidth: 440, measuredHeight: 168)
-        XCTAssertEqual(fitted, FolderExplainerSize(width: 440, height: 168))
+        let width = FolderExplainerLayout.width
+        let fitted = FolderExplainerLayout.size(measuredWidth: width, measuredHeight: 220)
+        XCTAssertEqual(fitted, FolderExplainerSize(width: width, height: 220))
 
         let collapsed = FolderExplainerLayout.size(measuredWidth: 28, measuredHeight: 960)
-        XCTAssertEqual(collapsed.width, FolderExplainerLayout.width)
+        XCTAssertEqual(collapsed.width, width)
         XCTAssertEqual(collapsed.height, FolderExplainerLayout.minimumHeight)
-        XCTAssertLessThan(collapsed.height, 200)
 
-        let huge = FolderExplainerLayout.size(measuredWidth: 440, measuredHeight: 1_400)
-        XCTAssertEqual(huge.width, FolderExplainerLayout.width)
+        let huge = FolderExplainerLayout.size(measuredWidth: width, measuredHeight: 1_400)
+        XCTAssertEqual(huge.width, width)
         XCTAssertEqual(huge.height, FolderExplainerLayout.maximumHeight)
 
         let empty = FolderExplainerLayout.size(measuredWidth: 0, measuredHeight: 0)
-        XCTAssertEqual(empty, FolderExplainerSize(width: FolderExplainerLayout.width, height: FolderExplainerLayout.minimumHeight))
+        XCTAssertEqual(empty, FolderExplainerSize(width: width, height: FolderExplainerLayout.minimumHeight))
     }
 
     func testShortcutDuringTheSystemPromptIsDropped() {
@@ -168,29 +170,84 @@ final class FolderExplainerTests: XCTestCase {
         XCTAssertEqual(FolderPromptHotkey.action(systemPromptWaiting: false), .perform)
     }
 
-    func testCopyNamesTheFolderAndDoesNotCarryAPath() {
-        XCTAssertEqual(
-            FolderExplainerCopy.usage,
-            "GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file."
-        )
-        let names: [(WallpaperPathPlace, String)] = [
-            (.desktop, "Desktop"),
-            (.documents, "Documents"),
-            (.downloads, "Downloads"),
-            (.icloud, "iCloud Drive"),
-            (.volumes, "a removable disk")
+    func testPlacePhraseForEveryPlaceAndTheBodyHasNoPath() {
+        let phrases: [WallpaperPathPlace: String] = [
+            .desktop: "on your Desktop",
+            .documents: "in your Documents folder",
+            .downloads: "in your Downloads folder",
+            .icloud: "in iCloud Drive",
+            .volumes: "on an external disk"
         ]
-        for (place, name) in names {
-            XCTAssertEqual(FolderExplainerCopy.placeName(place), name)
-            let message = FolderExplainerCopy.message(place: place)
-            XCTAssertTrue(message.contains(FolderExplainerCopy.usage), "place=\(place.rawValue)")
-            XCTAssertTrue(message.contains(name), "place=\(place.rawValue)")
-            XCTAssertFalse(message.contains("/"), "place=\(place.rawValue)")
-            XCTAssertFalse(message.contains("~"), "place=\(place.rawValue)")
-            XCTAssertFalse(message.contains("\\"), "place=\(place.rawValue)")
+        for place in WallpaperPathPlace.allCases {
+            let phrase = FolderExplainerCopy.placePhrase(place)
+            XCTAssertEqual(phrase, phrases[place], "place=\(place.rawValue)")
+            if phrases[place] == nil {
+                XCTAssertNil(FolderExplainerCopy.body(place: place), "place=\(place.rawValue)")
+                XCTAssertFalse(FolderExplainerCopy.promisesSystemPrompt(place), "place=\(place.rawValue)")
+                continue
+            }
+            let body = FolderExplainerCopy.body(place: place) ?? ""
+            XCTAssertTrue(body.contains(phrases[place] ?? ""), "place=\(place.rawValue)")
+            XCTAssertTrue(body.contains("Nothing leaves your Mac."), "place=\(place.rawValue)")
+            XCTAssertFalse(body.contains("/"), "place=\(place.rawValue)")
+            XCTAssertFalse(body.contains("~"), "place=\(place.rawValue)")
+            XCTAssertFalse(body.contains("\\"), "place=\(place.rawValue)")
+            if place == .icloud {
+                XCTAssertFalse(body.contains("macOS will ask"), "place=\(place.rawValue)")
+                XCTAssertFalse(FolderExplainerCopy.promisesSystemPrompt(place))
+            } else {
+                XCTAssertTrue(body.contains("macOS will ask you to allow it."), "place=\(place.rawValue)")
+                XCTAssertTrue(FolderExplainerCopy.promisesSystemPrompt(place))
+            }
         }
-        XCTAssertTrue(FolderExplainerCopy.message(place: .volumes).hasPrefix("Your wallpaper is on a removable disk."))
-        XCTAssertTrue(FolderExplainerCopy.message(place: .downloads).hasPrefix("Your wallpaper is in Downloads."))
+        XCTAssertEqual(FolderExplainerCopy.title, "Show your wallpaper blurred behind your apps?")
+        XCTAssertFalse(FolderExplainerCopy.title.contains("/"))
+        XCTAssertFalse(FolderExplainerCopy.usageDescription.contains("/"))
+    }
+
+    func testHotkeyWhilePendingSuspendsRatherThanDeclines() {
+        var session = FolderExplainerSession()
+        XCTAssertEqual(session.note(place: .downloads, gridClosed: true, dragActive: false), .show(.downloads))
+        XCTAssertEqual(session.gridOpened(), .wait(.downloads))
+        XCTAssertEqual(session.pending, .downloads)
+        XCTAssertTrue(session.asked.isEmpty)
+        XCTAssertTrue(session.denied.isEmpty)
+        XCTAssertEqual(session.gridClosed(dragActive: false), .show(.downloads))
+    }
+
+    func testCloseCountsAsNotNow() {
+        var session = FolderExplainerSession()
+        XCTAssertEqual(session.note(place: .desktop, gridClosed: true, dragActive: false), .show(.desktop))
+        let closed = session.notNow()
+        XCTAssertEqual(closed?.readAfter, false)
+        XCTAssertEqual(closed?.asked, [.desktop])
+        XCTAssertEqual(closed?.granted, [])
+        XCTAssertEqual(session.note(place: .desktop, gridClosed: true, dragActive: false), .idle)
+    }
+
+    func testReofferShowsTheSamePlace() {
+        var session = FolderExplainerSession()
+        XCTAssertEqual(session.note(place: .documents, gridClosed: true, dragActive: false), .show(.documents))
+        XCTAssertEqual(session.gridOpened(), .wait(.documents))
+        XCTAssertEqual(session.gridClosed(dragActive: false), .show(.documents))
+        XCTAssertEqual(session.pending, .documents)
+        XCTAssertTrue(session.asked.isEmpty)
+    }
+
+    func testDeniedStateShowsNoExplainer() {
+        var session = FolderExplainerSession(asked: [.downloads], denied: [.downloads])
+        XCTAssertEqual(session.note(place: .downloads, gridClosed: true, dragActive: false), .idle)
+        XCTAssertNil(session.pending)
+        XCTAssertFalse(session.visible)
+
+        var fresh = FolderExplainerSession()
+        XCTAssertEqual(fresh.note(place: .downloads, gridClosed: true, dragActive: false), .show(.downloads))
+        XCTAssertEqual(fresh.allow()?.readAfter, true)
+        fresh.noteDenied(.downloads)
+        XCTAssertEqual(fresh.deniedList, [.downloads])
+        XCTAssertEqual(fresh.note(place: .downloads, gridClosed: true, dragActive: false), .idle)
+        fresh.noteDenied(.photosLibrary)
+        XCTAssertEqual(fresh.deniedList, [.downloads])
     }
 
     func testProtectedPictureIsChosenFromPathTextAlone() {
@@ -329,6 +386,7 @@ final class FolderExplainerTests: XCTestCase {
         let migrated = try XCTUnwrap(store.load())
         XCTAssertEqual(migrated.askedLocations, [])
         XCTAssertEqual(migrated.grantedLocations, [])
+        XCTAssertEqual(migrated.deniedLocations, [])
 
         let grantWithoutAsk = """
         {
@@ -351,5 +409,20 @@ final class FolderExplainerTests: XCTestCase {
         XCTAssertEqual(session.note(place: .downloads, gridClosed: true, dragActive: false), .idle)
         XCTAssertEqual(session.lastRead(for: .downloads), .granted)
         XCTAssertEqual(session.note(place: .desktop, gridClosed: true, dragActive: false), .show(.desktop))
+
+        let refused = PersistedState(
+            layout: cleaned.layout,
+            shortcut: cleaned.shortcut,
+            askedLocations: [.downloads],
+            deniedLocations: [.downloads, .system]
+        )
+        try store.save(refused)
+        let refusedLoad = try XCTUnwrap(store.load())
+        XCTAssertEqual(refusedLoad.deniedLocations, [.downloads])
+        var refusedSession = FolderExplainerSession(
+            asked: refusedLoad.askedLocations,
+            denied: refusedLoad.deniedLocations
+        )
+        XCTAssertEqual(refusedSession.note(place: .downloads, gridClosed: true, dragActive: false), .idle)
     }
 }

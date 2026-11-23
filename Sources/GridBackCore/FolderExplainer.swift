@@ -32,15 +32,21 @@ public struct FolderExplainerRecord: Equatable, Sendable {
 public struct FolderExplainerSession: Equatable, Sendable {
     public private(set) var asked: Set<WallpaperPathPlace>
     public private(set) var granted: Set<WallpaperPathPlace>
+    public private(set) var denied: Set<WallpaperPathPlace>
     /// A place that has been offered and not answered. Hidden while the grid is open or a drag is active.
     public private(set) var pending: WallpaperPathPlace?
     public private(set) var visible: Bool
 
-    public init(asked: [WallpaperPathPlace] = [], granted: [WallpaperPathPlace] = []) {
+    public init(
+        asked: [WallpaperPathPlace] = [],
+        granted: [WallpaperPathPlace] = [],
+        denied: [WallpaperPathPlace] = []
+    ) {
         let askedList = FolderAccessRules.persisted(asked)
         let allowed = Set(askedList)
         self.asked = allowed
         self.granted = Set(FolderAccessRules.persisted(granted).filter { allowed.contains($0) })
+        self.denied = Set(FolderAccessRules.persisted(denied))
         self.pending = nil
         self.visible = false
     }
@@ -51,6 +57,10 @@ public struct FolderExplainerSession: Equatable, Sendable {
 
     public var grantedList: [WallpaperPathPlace] {
         FolderAccessRules.persisted(Array(granted))
+    }
+
+    public var deniedList: [WallpaperPathPlace] {
+        FolderAccessRules.persisted(Array(denied))
     }
 
     public func lastRead(for place: WallpaperPathPlace) -> FolderReadResult {
@@ -64,6 +74,11 @@ public struct FolderExplainerSession: Equatable, Sendable {
         gridClosed: Bool,
         dragActive: Bool
     ) -> FolderExplainerStep {
+        if denied.contains(place) {
+            pending = nil
+            visible = false
+            return .idle
+        }
         let decision = FolderAccessPolicy.decide(
             place: place,
             askedLocations: asked,
@@ -129,8 +144,11 @@ public struct FolderExplainerSession: Equatable, Sendable {
         granted = Set(grantedList)
     }
 
-    /// A deliberate read was refused. The place stays asked and is not read again.
+    /// A deliberate read was refused. The place is not offered again.
     public mutating func noteDenied(_ place: WallpaperPathPlace) {
+        guard FolderAccessRules.askable.contains(place) else { return }
+        denied.insert(place)
+        denied = Set(deniedList)
         granted.remove(place)
     }
 
@@ -176,9 +194,10 @@ public struct FolderExplainerSize: Equatable, Sendable {
 }
 
 public enum FolderExplainerLayout {
-    public static let width = 440.0
-    public static let minimumHeight = 128.0
-    public static let maximumHeight = 280.0
+    /// The same width as a system alert.
+    public static let width = 260.0
+    public static let minimumHeight = 160.0
+    public static let maximumHeight = 360.0
 
     /// `measuredWidth` and `measuredHeight` come from laying the text out at `width`.
     /// A narrower measurement is the collapsed show, so its height is not used.
@@ -203,28 +222,39 @@ public enum FolderPromptHotkey {
     }
 }
 
-/// Words for the explainer. The place name is a folder kind, never a path.
+/// Words for the explainer. The place is a folder kind, never a path.
 public enum FolderExplainerCopy {
-    public static let usage = "GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file."
+    public static let title = "Show your wallpaper blurred behind your apps?"
+    public static let usageDescription = "GridBack only opens your wallpaper image, to show it blurred behind your apps. Nothing leaves your Mac."
 
-    public static func placeName(_ place: WallpaperPathPlace) -> String {
+    /// Nil for a place that is never offered an ask.
+    public static func placePhrase(_ place: WallpaperPathPlace) -> String? {
         switch place {
-        case .desktop: return "Desktop"
-        case .documents: return "Documents"
-        case .downloads: return "Downloads"
-        case .icloud: return "iCloud Drive"
-        case .volumes: return "a removable disk"
-        case .pictures, .photosLibrary, .system, .other: return "that folder"
+        case .desktop: return "on your Desktop"
+        case .documents: return "in your Documents folder"
+        case .downloads: return "in your Downloads folder"
+        case .icloud: return "in iCloud Drive"
+        case .volumes: return "on an external disk"
+        case .pictures, .photosLibrary, .system, .other: return nil
         }
     }
 
-    public static func message(place: WallpaperPathPlace) -> String {
+    /// iCloud Drive is not one of the folders macOS asks about, so the text must not promise a prompt.
+    public static func promisesSystemPrompt(_ place: WallpaperPathPlace) -> Bool {
         switch place {
-        case .volumes:
-            return "Your wallpaper is on a removable disk. \(usage)"
-        default:
-            return "Your wallpaper is in \(placeName(place)). \(usage)"
+        case .desktop, .documents, .downloads, .volumes:
+            return true
+        case .icloud, .pictures, .photosLibrary, .system, .other:
+            return false
         }
+    }
+
+    public static func body(place: WallpaperPathPlace) -> String? {
+        guard let phrase = placePhrase(place) else { return nil }
+        if promisesSystemPrompt(place) {
+            return "Your wallpaper is saved \(phrase). To show it blurred behind your apps, GridBack needs to open that one image, and macOS will ask you to allow it. Nothing leaves your Mac."
+        }
+        return "Your wallpaper is saved \(phrase). To show it blurred behind your apps, GridBack needs to open that one image. It opens the image only when the file is already on this Mac. Nothing leaves your Mac."
     }
 }
 

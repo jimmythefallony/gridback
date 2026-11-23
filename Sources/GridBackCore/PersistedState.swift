@@ -7,25 +7,30 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public static let askedLocationsKey = "askedLocations"
     /// Saved name of the places whose wallpaper read was allowed.
     public static let grantedLocationsKey = "grantedLocations"
+    /// Saved name of the places macOS has already refused.
+    public static let deniedLocationsKey = "deniedLocations"
 
     public var version: Int
     public var layout: Layout
     public var shortcut: ShortcutChord
     public var askedLocations: [WallpaperPathPlace]
     public var grantedLocations: [WallpaperPathPlace]
+    public var deniedLocations: [WallpaperPathPlace]
 
     public init(
         version: Int = PersistedState.currentVersion,
         layout: Layout,
         shortcut: ShortcutChord,
         askedLocations: [WallpaperPathPlace] = [],
-        grantedLocations: [WallpaperPathPlace] = []
+        grantedLocations: [WallpaperPathPlace] = [],
+        deniedLocations: [WallpaperPathPlace] = []
     ) {
         self.version = version
         self.layout = layout
         self.shortcut = shortcut
         self.askedLocations = askedLocations
         self.grantedLocations = grantedLocations
+        self.deniedLocations = deniedLocations
     }
 
     public func repaired() -> PersistedState {
@@ -36,7 +41,8 @@ public struct PersistedState: Codable, Equatable, Sendable {
             layout: LayoutEditor.repair(layout),
             shortcut: shortcut,
             askedLocations: asked,
-            grantedLocations: FolderAccessRules.persisted(grantedLocations).filter { allowed.contains($0) }
+            grantedLocations: FolderAccessRules.persisted(grantedLocations).filter { allowed.contains($0) },
+            deniedLocations: FolderAccessRules.persisted(deniedLocations)
         )
     }
 
@@ -46,6 +52,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
         case shortcut
         case askedLocations
         case grantedLocations
+        case deniedLocations
     }
 
     public init(from decoder: Decoder) throws {
@@ -55,6 +62,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
         shortcut = try container.decode(ShortcutChord.self, forKey: .shortcut)
         askedLocations = try Self.readPlaces(container, key: .askedLocations)
         grantedLocations = try Self.readPlaces(container, key: .grantedLocations)
+        deniedLocations = try Self.readPlaces(container, key: .deniedLocations)
     }
 
     /// A missing list, a null, or a value that is not a place name is ignored.
@@ -97,6 +105,7 @@ public struct PersistedState: Codable, Equatable, Sendable {
         try container.encode(shortcut, forKey: .shortcut)
         try container.encode(askedLocations, forKey: .askedLocations)
         try container.encode(grantedLocations, forKey: .grantedLocations)
+        try container.encode(deniedLocations, forKey: .deniedLocations)
     }
 }
 

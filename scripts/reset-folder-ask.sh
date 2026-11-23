@@ -49,6 +49,7 @@ with open(path) as handle:
     saved = json.load(handle)
 saved["askedLocations"] = []
 saved["grantedLocations"] = []
+saved["deniedLocations"] = []
 with open(path, "w") as handle:
     json.dump(saved, handle, indent=2)
     handle.write("\n")

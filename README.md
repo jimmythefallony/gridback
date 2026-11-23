@@ -12,7 +12,7 @@ This is version 0.3.7. It is open source, and it is not a finished product.
 
 No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 
-To show a blurred copy behind your apps, GridBack reads your wallpaper file and nothing else. If the wallpaper is in Desktop, Documents, Downloads, iCloud Drive or on a removable disk, it asks you first. Nothing leaves the Mac.
+To show a blurred copy behind your apps, GridBack opens your wallpaper image and nothing else. If that image is in Desktop, Documents, Downloads, or on a removable disk, GridBack asks you first, and then macOS asks. An image in iCloud Drive is opened only when it is already on this Mac. Nothing leaves the Mac.
 
 To see that question again, quit GridBack and run ./scripts/reset-folder-ask.sh.
 
@@ -59,7 +59,7 @@ The pinch gesture on the trackpad is not in this version. You also cannot drag a
 ## Known issues
 
 - Wallpapers your account isn't allowed to read show a plain fallback that follows Light/Dark mode.
-- Wallpapers stored in Desktop, Documents, Downloads, iCloud Drive, or on a removable disk show a plain fallback that follows Light/Dark mode until you allow GridBack to read that folder. Photos libraries, network disks, and system wallpapers stay on the plain fallback.
+- Wallpapers stored in Desktop, Documents, Downloads, or on a removable disk show a plain fallback that follows Light/Dark mode until you continue and macOS allows that folder. If macOS has already refused it, the plain fallback stays. Photos libraries, network disks, internal disks, and system wallpapers stay on the plain fallback. An iCloud Drive wallpaper is used only when the file is already on this Mac.
 - Escape does not cancel a drag that is already underway. Let go of the pointer to finish the drag, then press Escape.
 - Dragging along the edge of a row can slide the icon you are aiming at before a folder has time to form.
 
