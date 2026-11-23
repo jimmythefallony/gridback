@@ -206,15 +206,8 @@ private struct FolderExplainerView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                Button(String(localized: "Not Now"), action: notNow)
-                    .keyboardShortcut(.cancelAction)
-                Button(String(localized: "Continue"), action: allow)
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(.top, 6)
+            AlertButtonRow(notNow: notNow, allow: allow)
+                .padding(.top, 6)
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -222,6 +215,86 @@ private struct FolderExplainerView: View {
         .frame(width: CGFloat(FolderExplainerLayout.width))
         .fixedSize(horizontal: true, vertical: true)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Two equal buttons across the text width, the same shape as a system alert.
+private struct AlertButtonRow: NSViewRepresentable {
+    var notNow: () -> Void
+    var allow: () -> Void
+
+    func makeNSView(context: Context) -> AlertButtonBox {
+        let box = AlertButtonBox()
+        box.notNow = notNow
+        box.allow = allow
+        return box
+    }
+
+    func updateNSView(_ box: AlertButtonBox, context: Context) {
+        box.notNow = notNow
+        box.allow = allow
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AlertButtonBox, context: Context) -> CGSize? {
+        let width = proposal.width ?? CGFloat(FolderExplainerLayout.width)
+        let height = nsView.fittingSize.height
+        return CGSize(width: width, height: height)
+    }
+}
+
+private final class AlertButtonBox: NSView {
+    var notNow: () -> Void = {}
+    var allow: () -> Void = {}
+
+    private let decline = NSButton()
+    private let proceed = NSButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        decline.title = String(localized: "Not Now")
+        decline.bezelStyle = .rounded
+        decline.controlSize = .large
+        decline.keyEquivalent = "\u{1b}"
+        decline.target = self
+        decline.action = #selector(didDecline)
+
+        proceed.title = String(localized: "Continue")
+        proceed.bezelStyle = .rounded
+        proceed.controlSize = .large
+        proceed.keyEquivalent = "\r"
+        proceed.target = self
+        proceed.action = #selector(didAllow)
+
+        decline.translatesAutoresizingMaskIntoConstraints = false
+        proceed.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(decline)
+        addSubview(proceed)
+        NSLayoutConstraint.activate([
+            decline.leadingAnchor.constraint(equalTo: leadingAnchor),
+            decline.topAnchor.constraint(equalTo: topAnchor),
+            decline.bottomAnchor.constraint(equalTo: bottomAnchor),
+            proceed.leadingAnchor.constraint(equalTo: decline.trailingAnchor, constant: 8),
+            proceed.trailingAnchor.constraint(equalTo: trailingAnchor),
+            proceed.topAnchor.constraint(equalTo: topAnchor),
+            proceed.bottomAnchor.constraint(equalTo: bottomAnchor),
+            decline.widthAnchor.constraint(equalTo: proceed.widthAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: decline.intrinsicContentSize.height)
+    }
+
+    @objc private func didDecline() {
+        notNow()
+    }
+
+    @objc private func didAllow() {
+        allow()
     }
 }
 
