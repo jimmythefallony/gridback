@@ -146,6 +146,28 @@ final class FolderExplainerTests: XCTestCase {
         XCTAssertTrue(session.asked.isEmpty)
     }
 
+    func testExplainerSizeStaysCompactOnEveryShow() {
+        let fitted = FolderExplainerLayout.size(measuredWidth: 440, measuredHeight: 168)
+        XCTAssertEqual(fitted, FolderExplainerSize(width: 440, height: 168))
+
+        let collapsed = FolderExplainerLayout.size(measuredWidth: 28, measuredHeight: 960)
+        XCTAssertEqual(collapsed.width, FolderExplainerLayout.width)
+        XCTAssertEqual(collapsed.height, FolderExplainerLayout.minimumHeight)
+        XCTAssertLessThan(collapsed.height, 200)
+
+        let huge = FolderExplainerLayout.size(measuredWidth: 440, measuredHeight: 1_400)
+        XCTAssertEqual(huge.width, FolderExplainerLayout.width)
+        XCTAssertEqual(huge.height, FolderExplainerLayout.maximumHeight)
+
+        let empty = FolderExplainerLayout.size(measuredWidth: 0, measuredHeight: 0)
+        XCTAssertEqual(empty, FolderExplainerSize(width: FolderExplainerLayout.width, height: FolderExplainerLayout.minimumHeight))
+    }
+
+    func testShortcutDuringTheSystemPromptIsDropped() {
+        XCTAssertEqual(FolderPromptHotkey.action(systemPromptWaiting: true), .drop)
+        XCTAssertEqual(FolderPromptHotkey.action(systemPromptWaiting: false), .perform)
+    }
+
     func testCopyNamesTheFolderAndDoesNotCarryAPath() {
         XCTAssertEqual(
             FolderExplainerCopy.usage,

@@ -164,6 +164,45 @@ public struct FolderExplainerSession: Equatable, Sendable {
     }
 }
 
+/// The explainer's size. The width stays fixed so a second show cannot collapse to one word per line.
+public struct FolderExplainerSize: Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+
+    public init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+}
+
+public enum FolderExplainerLayout {
+    public static let width = 440.0
+    public static let minimumHeight = 128.0
+    public static let maximumHeight = 280.0
+
+    /// `measuredWidth` and `measuredHeight` come from laying the text out at `width`.
+    /// A narrower measurement is the collapsed show, so its height is not used.
+    public static func size(measuredWidth: Double, measuredHeight: Double) -> FolderExplainerSize {
+        let measuredAtContentWidth = measuredWidth >= width * 0.75 && measuredHeight.isFinite && measuredHeight > 0
+        let raw = measuredAtContentWidth ? measuredHeight : minimumHeight
+        let height = min(max(raw, minimumHeight), maximumHeight)
+        return FolderExplainerSize(width: width, height: height)
+    }
+}
+
+/// A shortcut that arrives while the system folder prompt is waiting.
+/// Queuing it would open the grid after the prompt closes, so it is dropped.
+public enum FolderPromptHotkey {
+    public enum Action: Equatable, Sendable {
+        case perform
+        case drop
+    }
+
+    public static func action(systemPromptWaiting: Bool) -> Action {
+        systemPromptWaiting ? .drop : .perform
+    }
+}
+
 /// Words for the explainer. The place name is a folder kind, never a path.
 public enum FolderExplainerCopy {
     public static let usage = "GridBack shows a blurred copy of your wallpaper behind your apps. It only reads the wallpaper file."

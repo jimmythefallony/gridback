@@ -82,8 +82,15 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
             allow: { [weak self] in self?.allow() },
             notNow: { [weak self] in self?.notNow() }
         ))
-        let window = self.window ?? makeWindow(hosting: hosting)
+        // Automatic sizing uses a bad height the first time and a one-word width the next.
+        hosting.sizingOptions = .init()
+        let size = contentSize(of: hosting)
+        hosting.preferredContentSize = size
+        let window = self.window ?? makeWindow()
         window.contentViewController = hosting
+        window.contentMinSize = size
+        window.contentMaxSize = size
+        window.setContentSize(size)
         self.window = window
         window.center()
         NSApp.unhide(nil)
@@ -91,15 +98,33 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    private func makeWindow(hosting: NSViewController) -> NSWindow {
-        let window = NSWindow(contentViewController: hosting)
+    /// Lay the text out at the fixed width, then keep that width even if the measurement collapses.
+    private func contentSize(of hosting: NSHostingController<FolderExplainerView>) -> NSSize {
+        let width = CGFloat(FolderExplainerLayout.width)
+        hosting.view.frame = NSRect(x: 0, y: 0, width: width, height: CGFloat(FolderExplainerLayout.maximumHeight))
+        hosting.view.layoutSubtreeIfNeeded()
+        let measured = hosting.sizeThatFits(in: NSSize(width: width, height: CGFloat(FolderExplainerLayout.maximumHeight)))
+        let chosen = FolderExplainerLayout.size(
+            measuredWidth: Double(measured.width),
+            measuredHeight: Double(measured.height)
+        )
+        return NSSize(width: chosen.width, height: chosen.height)
+    }
+
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: CGFloat(FolderExplainerLayout.width), height: CGFloat(FolderExplainerLayout.minimumHeight)),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
         window.title = String(localized: "GridBack")
-        window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.delegate = self
         window.level = .normal
-        window.setContentSize(NSSize(width: 440, height: 230))
+        // Follow the Space the user is on, including away from a full-screen app.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         return window
     }
 
@@ -171,7 +196,8 @@ private struct FolderExplainerView: View {
             }
         }
         .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(width: CGFloat(FolderExplainerLayout.width))
+        .fixedSize(horizontal: true, vertical: true)
     }
 }
 
@@ -227,10 +253,28 @@ enum FolderAccessRead {
         qos: .userInitiated
     )
 
+    private static let waitingLock = NSLock()
+    private static var waitingForSystemPrompt = false
+
+    /// True from the moment the deliberate read is scheduled until the person has answered.
+    static var isWaitingForSystemPrompt: Bool {
+        waitingLock.lock()
+        defer { waitingLock.unlock() }
+        return waitingForSystemPrompt
+    }
+
+    private static func setWaiting(_ waiting: Bool) {
+        waitingLock.lock()
+        waitingForSystemPrompt = waiting
+        waitingLock.unlock()
+    }
+
     static func start(path: String, place: WallpaperPathPlace, done: @escaping (Bool) -> Void) {
+        setWaiting(true)
         queue.async {
             let granted = readFirstBytes(path: path, place: place)
             DispatchQueue.main.async {
+                setWaiting(false)
                 done(granted)
             }
         }

@@ -14,6 +14,8 @@ No accounts, no tracking, nothing leaves your Mac unless you turn it on.
 
 To show a blurred copy behind your apps, GridBack reads your wallpaper file and nothing else. If the wallpaper is in Desktop, Documents, Downloads, iCloud Drive or on a removable disk, it asks you first. Nothing leaves the Mac.
 
+To see that question again, quit GridBack and run ./scripts/reset-folder-ask.sh.
+
 GridBack writes basic speed and memory numbers to the Mac's own log, which never leaves the Mac.
 
 To read a summary of those numbers, run ./scripts/perf-report.sh.

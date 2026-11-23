@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- GridBack asks once before reading a wallpaper in Desktop, Documents, Downloads, iCloud Drive, or on a removable disk.
+- GridBack asks once before reading a wallpaper in Desktop, Documents, Downloads, iCloud Drive, or on a removable disk. The question is a small window and it follows you to the Space you are using. A shortcut pressed while the system folder prompt is open is ignored.
 - Groundwork for asking permission to show wallpapers from private folders.
 - Idle CPU in the open summary uses gaps of a minute or longer. Each open records how long the grid stayed closed, and the average over every gap is still shown.
 - A colour you pick yourself in Wallpaper settings is matched, with dark or light text so it stays readable.

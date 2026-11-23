@@ -113,6 +113,11 @@ private func gridBackHotKeyCallback(
         return status
     }
     log.info("Hotkey pressed signature=\(identity.signature, privacy: .public) id=\(identity.id, privacy: .public)")
+    // The system folder prompt blocks the main queue. A press queued now would
+    // open the grid by itself when the prompt closes, so it is dropped.
+    if FolderPromptHotkey.action(systemPromptWaiting: FolderAccessRead.isWaitingForSystemPrompt) == .drop {
+        return noErr
+    }
     // Start the open interval here, before the hop to the main thread, and
     // only when the grid is closed. A press that closes the grid does not.
     GridOpenTrace.shared.hotkeyArrived()
