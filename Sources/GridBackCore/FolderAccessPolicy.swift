@@ -31,6 +31,8 @@ public enum FolderAccessRules {
 public enum FolderVolumeKind: String, Equatable, Sendable {
     case none
     case removable
+    /// A local volume that is not removable. macOS does not ask before it is read.
+    case fixed
     case network
 }
 
@@ -59,6 +61,9 @@ public enum FolderAccessPolicy {
     ) -> FolderAccessDecision {
         if place == .volumes, FolderAccessRules.neverAskVolumeKinds.contains(volumeKind) {
             return .doNotTouch
+        }
+        if place == .volumes, volumeKind == .fixed {
+            return lastRead == .denied ? .fallback : .tryRead
         }
         if !place.isProtected {
             return lastRead == .denied ? .fallback : .tryRead

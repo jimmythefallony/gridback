@@ -39,6 +39,10 @@ struct OverlayRootView: View {
     @State private var closedDropToken = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var iconDragActive: Bool {
+        reorder != nil || folderDragID != nil
+    }
+
     var body: some View {
         GeometryReader { overlay in
             let metrics = model.layout.metrics.clamped
@@ -162,6 +166,9 @@ struct OverlayRootView: View {
             }
             .onAppear {
                 visualPage = CGFloat(model.currentPage)
+            }
+            .onChange(of: iconDragActive) { _, active in
+                model.setPointerDragActive(active)
             }
             .onChange(of: armClock.tick) { _, _ in
                 if model.heldDrag.suppressCommit {

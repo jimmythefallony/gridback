@@ -293,12 +293,26 @@ final class OverlayController: NSObject {
         }
     }
 
+    /// Prepares the blur while the grid is closed, including after a wallpaper folder is allowed.
+    func preparePictureForNextOpen() {
+        guard !wantsGrid else { return }
+        prewarmPicture()
+    }
+
+    private func pictureJob(on screen: NSScreen) -> DesktopPictureJob {
+        DesktopPicture.job(
+            on: screen,
+            askedLocations: model?.folderAsked ?? [],
+            grantedLocations: model?.folderGranted ?? []
+        )
+    }
+
     /// Prepares the blur before the grid opens. Opening the grid already re-reads
     /// the wallpaper, so this runs at launch and when Light or Dark changes.
     /// An Aerial frame is grabbed here too, so a later open can use the cache.
     private func prewarmPicture() {
         guard !wantsGrid, let screen = PrimaryDisplay.screen() else { return }
-        let job = DesktopPicture.job(on: screen)
+        let job = pictureJob(on: screen)
         notePicture(job)
         preparedKey = job.cacheKey
         guard DesktopPicture.cached(job.cacheKey) == nil else { return }
@@ -315,7 +329,7 @@ final class OverlayController: NSObject {
     /// An Aerial miss shows the plain fallback immediately. The frame is grabbed
     /// off the main thread and fades in when it is ready. `show()` does not wait.
     private func ensurePicture(generation: Int, on screen: NSScreen) {
-        let job = DesktopPicture.job(on: screen)
+        let job = pictureJob(on: screen)
         notePicture(job)
         pictureKey = job.cacheKey
         preparedKey = job.cacheKey
@@ -370,6 +384,9 @@ final class OverlayController: NSObject {
         }
         if !job.structureLog.isEmpty {
             log.info("DesktopPicture structure=\(job.structureLog, privacy: .public)")
+        }
+        if let place = job.folderPlace, let decision = job.folderDecision {
+            log.info("\(FolderAccessLog.line(place: place, decision: decision), privacy: .public)")
         }
     }
 
@@ -525,7 +542,12 @@ final class OverlayController: NSObject {
             screenX: Double(panel.frame.minX),
             screenY: Double(panel.frame.minY),
             screenWidth: Double(panel.frame.width),
-            screenHeight: Double(panel.frame.height)
+            screenHeight: Double(panel.frame.height),
+            askPath: nil,
+            askPlace: nil,
+            askVolumeKind: .none,
+            folderPlace: nil,
+            folderDecision: nil
         )
         applyPicture(image, job: screen)
     }
@@ -687,6 +709,13 @@ struct DesktopPictureJob {
     var screenY: Double
     var screenWidth: Double
     var screenHeight: Double
+    /// Set only when the explainer may be offered. The path is kept for the later read and is not logged.
+    var askPath: String? = nil
+    var askPlace: WallpaperPathPlace? = nil
+    var askVolumeKind: FolderVolumeKind = .none
+    /// The protected place this picture came from, when there is one. Logged by name only.
+    var folderPlace: WallpaperPathPlace? = nil
+    var folderDecision: FolderAccessDecision? = nil
 
     var prefersPlainBlur: Bool { url == nil && solidColor == nil }
 }
@@ -770,7 +799,11 @@ enum DesktopPicture {
     /// frame of the local movie. A missing movie stays the plain blur.
     /// A sandboxed build cannot read the wallpaper store, and then only a plain
     /// photo URL is used.
-    static func job(on screen: NSScreen) -> DesktopPictureJob {
+    static func job(
+        on screen: NSScreen,
+        askedLocations: Set<WallpaperPathPlace> = [],
+        grantedLocations: Set<WallpaperPathPlace> = []
+    ) -> DesktopPictureJob {
         let appearance = systemAppearance()
         let workspacePath = NSWorkspace.shared.desktopImageURL(for: screen)?.path
         let stored = WallpaperStoreReader.load()
@@ -812,6 +845,56 @@ enum DesktopPicture {
                     : (source: decision.source, use: .plainBlur, kind: .fallback)
             }
         }
+        let resolvedUseIsFile: Bool
+        if case .imageFile = decision.use {
+            resolvedUseIsFile = true
+        } else {
+            resolvedUseIsFile = false
+        }
+        let protected = FolderAskTargeting.protectedPicture(
+            provider: choice?.provider,
+            isFolder: choice?.isFolder ?? false,
+            storePaths: choice.map { candidate in
+                candidate.imageCandidates.isEmpty
+                    ? (candidate.imageFilePath.map { [$0] } ?? [])
+                    : candidate.imageCandidates
+            } ?? [],
+            workspacePath: workspacePath,
+            resolvedUseIsFile: resolvedUseIsFile
+        )
+        var folderPlace: WallpaperPathPlace?
+        var folderDecision: FolderAccessDecision?
+        var askPath: String?
+        var askPlace: WallpaperPathPlace?
+        var askVolumeKind = FolderVolumeKind.none
+        if let protected {
+            let volumeKind = FolderVolumeKindProbe.kind(path: protected.path)
+            let accessDecision = FolderAccessPolicy.decide(
+                place: protected.place,
+                askedLocations: askedLocations,
+                lastRead: grantedLocations.contains(protected.place) ? .granted : .unknown,
+                volumeKind: volumeKind
+            )
+            folderPlace = protected.place
+            folderDecision = accessDecision
+            switch accessDecision {
+            case .tryRead:
+                let local = protected.place == .icloud ? FolderFileLocality.isLocal(protected.path) : true
+                if FolderProbePlan.shouldOpen(place: protected.place, alreadyLocal: local),
+                   WallpaperFileAccess.look(protected.path, includingProtected: true)?.readable == true {
+                    let source = decision.source == .none ? WallpaperSource.legacy : decision.source
+                    decision = (source: source, use: .imageFile(protected.path), kind: .still)
+                } else {
+                    folderDecision = .fallback
+                }
+            case .offerAsk:
+                askPath = protected.path
+                askPlace = protected.place
+                askVolumeKind = volumeKind
+            case .fallback, .doNotTouch:
+                break
+            }
+        }
         let legacyProtected = workspacePath.map { WallpaperPathPlace.classify($0).isProtected } ?? false
         let skippingProtected = access.protected || (legacyProtected && decision.use == .plainBlur && (choice == nil || choice?.provider == WallpaperStoreIndex.imageProvider))
         let urlLog: String
@@ -826,13 +909,24 @@ enum DesktopPicture {
                 ext: access.ext,
                 reason: "unreadable"
             )
-        } else if access.protected {
+        } else if access.protected && folderDecision != .tryRead {
             urlLog = WallpaperURLLog.protected(
                 shape: choice?.urlShape ?? "none",
                 filesCount: choice?.filesCount ?? 0,
                 pathParsed: access.pathParsed,
                 place: access.place,
                 ext: access.ext
+            )
+        } else if folderDecision == .tryRead, let folderPlace {
+            urlLog = WallpaperURLLog.line(
+                shape: choice?.urlShape ?? "String",
+                filesCount: choice?.filesCount ?? 0,
+                pathParsed: true,
+                exists: "true",
+                readable: "true",
+                place: folderPlace.rawValue,
+                ext: WallpaperPathPlace.ext(of: protected?.path ?? ""),
+                reason: "allowed"
             )
         } else if skippingProtected, let workspacePath {
             urlLog = WallpaperURLLog.protected(
@@ -883,11 +977,17 @@ enum DesktopPicture {
         var token = "plain"
         switch decision.use {
         case .imageFile(let path):
-            if WallpaperPathPlace.classify(path).isProtected {
-                kind = .fallback
-                color = WallpaperNeutralFill.color(for: .dark)
-                token = "protected"
-                break
+            let picturePlace = WallpaperPathPlace.classify(path)
+            if picturePlace.isProtected {
+                let local = picturePlace == .icloud ? FolderFileLocality.isLocal(path) : true
+                let allowed = grantedLocations.contains(picturePlace)
+                    && FolderProbePlan.shouldOpen(place: picturePlace, alreadyLocal: local)
+                if !allowed {
+                    kind = .fallback
+                    color = WallpaperNeutralFill.color(for: .dark)
+                    token = "protected"
+                    break
+                }
             }
             let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
             kind = WallpaperClassifier.kind(hints: read.hints, imageCount: read.imageCount)
@@ -967,7 +1067,12 @@ enum DesktopPicture {
             screenX: Double(screen.frame.origin.x),
             screenY: Double(screen.frame.origin.y),
             screenWidth: Double(screen.frame.size.width),
-            screenHeight: Double(screen.frame.size.height)
+            screenHeight: Double(screen.frame.size.height),
+            askPath: askPath,
+            askPlace: askPlace,
+            askVolumeKind: askVolumeKind,
+            folderPlace: folderPlace,
+            folderDecision: folderDecision
         )
     }
 
@@ -1001,7 +1106,12 @@ enum DesktopPicture {
             screenX: 0,
             screenY: 0,
             screenWidth: Double(pointSize.width),
-            screenHeight: Double(pointSize.height)
+            screenHeight: Double(pointSize.height),
+            askPath: nil,
+            askPlace: nil,
+            askVolumeKind: .none,
+            folderPlace: nil,
+            folderDecision: nil
         )) else { return nil }
         return NSImage(cgImage: cgImage, size: pointSize)
     }
@@ -1136,8 +1246,8 @@ enum DesktopPicture {
 }
 
 /// Checks a picture path only after its folder is known from the text.
-/// Desktop, Documents, Downloads, Photos, iCloud Drive, and external volumes are never opened.
-/// Bookmark data is not resolved, because resolving it reads the file.
+/// Desktop, Documents, Downloads, Photos, iCloud Drive, and external volumes stay closed
+/// until that place has been allowed. Bookmark data is not resolved, because resolving it reads the file.
 enum WallpaperFileAccess {
     struct Report {
         var usablePath: String?
@@ -1216,10 +1326,12 @@ enum WallpaperFileAccess {
         )
     }
 
-    /// Nil means the path is protected or not absolute, so the file was not touched.
-    static func look(_ path: String) -> Look? {
+    /// Nil means the path was left closed or is not absolute, so the file was not touched.
+    /// A protected path is opened only after that place has been allowed.
+    static func look(_ path: String, includingProtected: Bool = false) -> Look? {
         let normalized = WallpaperPathPlace.normalized(path)
-        if WallpaperPathPlace.classify(normalized).isProtected || !normalized.hasPrefix("/") {
+        let place = WallpaperPathPlace.classify(normalized)
+        if (place.isProtected && !includingProtected) || !normalized.hasPrefix("/") {
             return nil
         }
         var directory = ObjCBool(false)

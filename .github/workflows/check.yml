@@ -1,0 +1,13 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  no-network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No network connections
+        run: ./scripts/check-no-network.sh

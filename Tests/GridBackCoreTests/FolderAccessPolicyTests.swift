@@ -20,7 +20,7 @@ final class FolderAccessPolicyTests: XCTestCase {
     func testEveryPlaceAskedFlagAndReadResult() {
         let reads: [FolderReadResult] = [.granted, .denied, .unknown]
         for place in WallpaperPathPlace.allCases {
-            let kinds: [FolderVolumeKind] = place == .volumes ? [.none, .removable, .network] : [.none]
+            let kinds: [FolderVolumeKind] = place == .volumes ? [.none, .removable, .network, .fixed] : [.none]
             for volumeKind in kinds {
                 for asked in [false, true] {
                     for lastRead in reads {
@@ -45,7 +45,7 @@ final class FolderAccessPolicyTests: XCTestCase {
                         if place == .photosLibrary || place == .system || volumeKind == .network {
                             XCTAssertNotEqual(decision, .offerAsk, "place=\(place.rawValue)")
                         }
-                        if place.isProtected, !asked {
+                        if place.isProtected, !asked, volumeKind != .fixed {
                             XCTAssertNotEqual(decision, .tryRead, "place=\(place.rawValue)")
                         }
                     }
@@ -411,6 +411,9 @@ final class FolderAccessPolicyTests: XCTestCase {
     ) -> FolderAccessDecision {
         if place == .volumes, volumeKind == .network {
             return .doNotTouch
+        }
+        if place == .volumes, volumeKind == .fixed {
+            return lastRead == .denied ? .fallback : .tryRead
         }
         switch place {
         case .photosLibrary:

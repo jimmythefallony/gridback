@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     }
 
     private let overlay = OverlayController()
+    private let folderAccess = FolderExplainerController()
     private let settings = SettingsWindowController()
     private let loginItem = LoginItemModel(service: SystemLoginItemService())
     private var menuBar: MenuBarController?
@@ -27,11 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
         MainMenu.install()
         model.delegate = self
         overlay.attach(model: model)
+        folderAccess.attach(model: model, overlay: overlay)
         GridOpenTrace.prepare()
         let menu = MenuBarController(model: model)
         menuBar = menu
         installKeyMonitor()
         model.start()
+        folderAccess.considerCurrentWallpaper()
         log.info("Hotkey status \(self.model.hotkeyFailure ?? "registered", privacy: .public)")
     }
 
@@ -42,18 +45,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     }
 
     func gridBackShowOverlay() {
+        folderAccess.gridOpened()
         overlay.show()
     }
 
     func gridBackHideOverlay() {
         overlay.hide()
-        if !settings.isVisible {
+        let explaining = folderAccess.gridClosed()
+        if !settings.isVisible && !explaining {
             NSApp.hide(nil)
         }
     }
 
     func gridBackShowSettings() {
         settings.show(model: model, loginItem: loginItem)
+    }
+
+    func gridBackDragEnded() {
+        folderAccess.dragEnded()
     }
 
     private func installKeyMonitor() {

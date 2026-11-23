@@ -7,6 +7,7 @@ protocol GridBackUIDelegate: AnyObject {
     func gridBackShowOverlay()
     func gridBackHideOverlay()
     func gridBackShowSettings()
+    func gridBackDragEnded()
 }
 
 /// Main-thread coordinator for the menu bar, overlay, catalog, and saved layout.
@@ -24,7 +25,13 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var isOverlayVisible = false
     @Published private(set) var launchError: String?
     @Published private(set) var shortcut: ShortcutChord
-    @Published var heldDrag = HeldDrag()
+    @Published var heldDrag = HeldDrag() {
+        didSet {
+            if oldValue.isActive, !heldDrag.isActive, !pointerDragActive {
+                delegate?.gridBackDragEnded()
+            }
+        }
+    }
     @Published private(set) var hotkeyFailure: String?
     @Published private(set) var persistenceWarning: String?
     @Published private(set) var isRecordingShortcut = false
@@ -44,8 +51,10 @@ final class GridBackModel: ObservableObject {
     weak var delegate: GridBackUIDelegate?
 
     private let store: PersistenceStore
-    /// Places the folder explainer has already been offered. Kept across layout saves.
-    private var askedLocations: [WallpaperPathPlace] = []
+    /// Places the explainer has offered, and places whose read was allowed. Kept across layout saves.
+    private var explainer = FolderExplainerSession()
+    /// A pointer drag that lives in the grid view, separate from a held folder drag.
+    private var pointerDragActive = false
     private let catalog = AppCatalog()
     private let launcher = AppLauncher()
     private let hotkey = GlobalHotkeyCenter()
@@ -80,7 +89,11 @@ final class GridBackModel: ObservableObject {
         case .loaded(let state):
             layout = state.layout
             shortcut = state.shortcut
-            askedLocations = state.askedLocations
+            explainer = FolderExplainerSession(
+                asked: state.askedLocations,
+                granted: state.grantedLocations,
+                denied: state.deniedLocations
+            )
             hasSavedLayout = true
         case .missing:
             layout = Layout(pages: [], metrics: .classic)
@@ -96,6 +109,63 @@ final class GridBackModel: ObservableObject {
     func updateScreenReserve(_ reserve: ScreenReserve) {
         guard reserve != screenReserve else { return }
         screenReserve = reserve
+    }
+
+    var folderAsked: Set<WallpaperPathPlace> { explainer.asked }
+    var folderGranted: Set<WallpaperPathPlace> { explainer.granted }
+    var folderDragActive: Bool { heldDrag.isActive || pointerDragActive }
+
+    func setPointerDragActive(_ active: Bool) {
+        guard active != pointerDragActive else { return }
+        let wasDragging = folderDragActive
+        pointerDragActive = active
+        if wasDragging, !folderDragActive {
+            delegate?.gridBackDragEnded()
+        }
+    }
+
+    func noteFolderWallpaper(
+        place: WallpaperPathPlace,
+        volumeKind: FolderVolumeKind,
+        gridClosed: Bool,
+        dragActive: Bool
+    ) -> FolderExplainerStep {
+        explainer.note(place: place, volumeKind: volumeKind, gridClosed: gridClosed, dragActive: dragActive)
+    }
+
+    func folderExplainerGridOpened() -> FolderExplainerStep {
+        explainer.gridOpened()
+    }
+
+    func clearFolderExplainer() -> FolderExplainerStep {
+        explainer.clearUnanswered()
+    }
+
+    func allowFolderAccess() -> FolderExplainerRecord? {
+        guard let record = explainer.allow() else { return nil }
+        save()
+        return record
+    }
+
+    func declineFolderAccess() -> FolderExplainerRecord? {
+        guard let record = explainer.notNow() else { return nil }
+        save()
+        return record
+    }
+
+    func noteFolderGranted(_ place: WallpaperPathPlace) {
+        let before = explainer.granted
+        explainer.noteGranted(place)
+        guard explainer.granted != before else { return }
+        save()
+    }
+
+    func noteFolderDenied(_ place: WallpaperPathPlace) {
+        let beforeGranted = explainer.granted
+        let beforeDenied = explainer.denied
+        explainer.noteDenied(place)
+        guard explainer.granted != beforeGranted || explainer.denied != beforeDenied else { return }
+        save()
     }
 
     /// The overlay calls this in the same turn it shows the backdrop. Nothing else writes the ink.
@@ -542,7 +612,13 @@ final class GridBackModel: ObservableObject {
 
     private func save() {
         guard persistEnabled else { return }
-        let state = PersistedState(layout: layout, shortcut: shortcut, askedLocations: askedLocations)
+        let state = PersistedState(
+            layout: layout,
+            shortcut: shortcut,
+            askedLocations: explainer.askedList,
+            grantedLocations: explainer.grantedList,
+            deniedLocations: explainer.deniedList
+        )
         do {
             try store.save(state)
         } catch {
