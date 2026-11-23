@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
 
     private let overlay = OverlayController()
     private let folderAccess = FolderExplainerController()
+    private let folderSettings = FolderSettingsController()
     private let settings = SettingsWindowController()
     private let loginItem = LoginItemModel(service: SystemLoginItemService())
     private var menuBar: MenuBarController?
@@ -29,6 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
         model.delegate = self
         overlay.attach(model: model)
         folderAccess.attach(model: model, overlay: overlay)
+        folderSettings.attach(
+            model: model,
+            overlay: overlay,
+            explainer: folderAccess,
+            settingsOpen: { [weak self] in self?.settings.isVisible == true }
+        )
+        settings.onNeedsRefresh = { [weak self] in
+            self?.folderSettings.settingsBecameKey()
+        }
+        folderSettings.start()
         GridOpenTrace.prepare()
         let menu = MenuBarController(model: model)
         menuBar = menu
@@ -63,6 +74,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
 
     func gridBackDragEnded() {
         folderAccess.dragEnded()
+    }
+
+    func gridBackOfferFolderExplainer() {
+        folderSettings.offerCurrent()
+    }
+
+    func gridBackOpenPrivacySettings() {
+        PrivacySettingsLink.open()
     }
 
     private func installKeyMonitor() {

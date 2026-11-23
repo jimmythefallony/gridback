@@ -72,6 +72,54 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if model.folderAccessReady {
+                Divider()
+
+                Text(FolderAccessStatusCopy.rowTitle)
+                    .font(.headline)
+
+                if let place = model.folderAccessPlace {
+                    Text(FolderAccessStatusCopy.placePhrase(place, volumeKind: model.folderAccessVolumeKind))
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(alignment: .center, spacing: 12) {
+                    Text(FolderAccessStatusCopy.line(model.folderAccessStatus))
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    if let action = FolderAccessStatusCopy.action(model.folderAccessStatus) {
+                        Button(FolderAccessStatusCopy.buttonTitle(action)) {
+                            switch action {
+                            case .allow:
+                                model.requestFolderAllow()
+                            case .askAgain:
+                                model.requestFolderAskAgain()
+                            case .openPrivacySettings:
+                                model.openFolderPrivacySettings()
+                            }
+                        }
+                        .disabled(model.folderAccessBusy)
+                    }
+                }
+
+                if let detail = FolderAccessStatusCopy.detail(model.folderAccessStatus) {
+                    Text(detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let hint = FolderAccessStatusCopy.hint(for: model.folderAccessStatus) {
+                    Text(hint)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             if let note = model.quitNote {
                 QuitNote(
                     text: note,
@@ -84,7 +132,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460, height: 440, alignment: .topLeading)
+        .frame(width: 460, height: 640, alignment: .topLeading)
         .onAppear { loginItem.refresh() }
     }
 

@@ -60,6 +60,18 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         considerCurrentWallpaper()
     }
 
+    /// Allow or Ask again from Settings. The existing window is used, and only when the grid is closed.
+    func offer(place: WallpaperPathPlace, path: String, volumeKind: FolderVolumeKind) {
+        guard let model else { return }
+        let step = model.noteFolderWallpaper(
+            place: place,
+            volumeKind: volumeKind,
+            gridClosed: !model.isOverlayVisible,
+            dragActive: model.folderDragActive
+        )
+        apply(step, path: path)
+    }
+
     private func apply(_ step: FolderExplainerStep, path: String) {
         switch step {
         case .idle:
@@ -143,6 +155,7 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         shownPlace = nil
         rememberedPath = nil
         guard let record = model.allowFolderAccess(), record.place == place, record.readAfter else { return }
+        model.noteFolderReadStarted()
         let overlay = self.overlay
         let log = self.log
         FolderAccessRead.start(path: path, place: place) { [weak model] granted in
