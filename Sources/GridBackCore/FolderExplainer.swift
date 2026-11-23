@@ -63,6 +63,19 @@ public struct FolderExplainerSession: Equatable, Sendable {
         FolderAccessRules.persisted(Array(denied))
     }
 
+    /// Replaces the saved lists. An offer that is still on screen is left as it is.
+    public mutating func replaceLists(
+        asked: [WallpaperPathPlace],
+        granted: [WallpaperPathPlace],
+        denied: [WallpaperPathPlace]
+    ) {
+        let askedList = FolderAccessRules.persisted(asked)
+        let allowed = Set(askedList)
+        self.asked = allowed
+        self.granted = Set(FolderAccessRules.persisted(granted).filter { allowed.contains($0) })
+        self.denied = Set(FolderAccessRules.persisted(denied))
+    }
+
     public func lastRead(for place: WallpaperPathPlace) -> FolderReadResult {
         granted.contains(place) ? .granted : .unknown
     }

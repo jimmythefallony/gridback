@@ -28,7 +28,7 @@ public enum FolderAccessRules {
 }
 
 /// Path text cannot tell a removable disk from a network volume, so the caller passes the kind.
-public enum FolderVolumeKind: String, Equatable, Sendable {
+public enum FolderVolumeKind: String, CaseIterable, Equatable, Sendable {
     case none
     case removable
     /// A local volume that is not removable. macOS does not ask before it is read.
@@ -134,6 +134,11 @@ public struct FolderDenialCache: Equatable, Sendable {
     public mutating func store(path: String, modified: Date?) {
         entries.removeAll { $0.path == path }
         entries.append(Entry(path: path, modified: modified))
+    }
+
+    /// Drops a stored denial after a later read of that same file succeeded.
+    public mutating func clear(path: String) {
+        entries.removeAll { $0.path == path }
     }
 
     /// True only when a stored denial should be read again.
