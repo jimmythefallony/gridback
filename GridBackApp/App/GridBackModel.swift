@@ -8,6 +8,8 @@ protocol GridBackUIDelegate: AnyObject {
     func gridBackHideOverlay()
     func gridBackShowSettings()
     func gridBackDragEnded()
+    func gridBackOfferFolderExplainer()
+    func gridBackOpenPrivacySettings()
 }
 
 /// Main-thread coordinator for the menu bar, overlay, catalog, and saved layout.
@@ -47,6 +49,14 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var screenReserve = ScreenReserve.none
     /// Foreground ink for the open grid. The overlay sets this with the backdrop.
     @Published private(set) var ink: Ink = .light
+    /// The Settings line for the current wallpaper folder. The view only reads this.
+    @Published private(set) var folderAccessStatus: FolderAccessStatus = .notNeeded
+    @Published private(set) var folderAccessPlace: WallpaperPathPlace?
+    @Published private(set) var folderAccessVolumeKind = FolderVolumeKind.none
+    /// False until the current wallpaper has been classified. The view stays blank until then.
+    @Published private(set) var folderAccessReady = false
+    /// True while Apple's folder prompt is waiting, so the Settings button is not pressed again.
+    @Published private(set) var folderAccessBusy = false
 
     weak var delegate: GridBackUIDelegate?
 
@@ -150,22 +160,133 @@ final class GridBackModel: ObservableObject {
     func declineFolderAccess() -> FolderExplainerRecord? {
         guard let record = explainer.notNow() else { return nil }
         save()
+        republishFolderLine()
         return record
+    }
+
+    /// The deliberate read is about to start. The Settings button waits until it finishes.
+    func noteFolderReadStarted() {
+        folderAccessBusy = true
     }
 
     func noteFolderGranted(_ place: WallpaperPathPlace) {
         let before = explainer.granted
         explainer.noteGranted(place)
-        guard explainer.granted != before else { return }
-        save()
+        if explainer.granted != before {
+            save()
+        }
+        folderAccessBusy = false
+        republishFolderLine()
     }
 
     func noteFolderDenied(_ place: WallpaperPathPlace) {
         let beforeGranted = explainer.granted
         let beforeDenied = explainer.denied
         explainer.noteDenied(place)
-        guard explainer.granted != beforeGranted || explainer.denied != beforeDenied else { return }
+        if explainer.granted != beforeGranted || explainer.denied != beforeDenied {
+            save()
+        }
+        folderAccessBusy = false
+        republishFolderLine()
+    }
+
+    /// Classifies the current wallpaper for the Settings line. This does not open the file.
+    func noteFolderSubject(place: WallpaperPathPlace?, volumeKind: FolderVolumeKind) {
+        folderAccessPlace = place
+        folderAccessVolumeKind = volumeKind
+        folderAccessReady = true
+        // A read is in flight. Leave the line as it is until that read finishes.
+        guard !folderAccessBusy else { return }
+        guard let place else {
+            folderAccessStatus = .notNeeded
+            return
+        }
+        folderAccessStatus = FolderAccessStatus.make(
+            place: place,
+            volumeKind: volumeKind,
+            asked: explainer.asked.contains(place),
+            granted: explainer.granted.contains(place),
+            denied: explainer.denied.contains(place),
+            lastRead: folderLastRead(for: place)
+        )
+    }
+
+    /// Not asked shows the existing explainer. The file is still not opened here.
+    func requestFolderAllow() {
+        guard folderAccessReady, folderAccessStatus == .notAsked, !folderAccessBusy else { return }
+        delegate?.gridBackOfferFolderExplainer()
+    }
+
+    /// Not now forgets the ask and shows the explainer again. The write is the usual atomic save.
+    func requestFolderAskAgain() {
+        guard folderAccessReady, !folderAccessBusy, let place = folderAccessPlace else { return }
+        let current = FolderAccessLists(
+            asked: explainer.askedList,
+            granted: explainer.grantedList,
+            denied: explainer.deniedList
+        )
+        let updated = FolderAccessEdits.askAgain(
+            place: place,
+            volumeKind: folderAccessVolumeKind,
+            asked: current.asked,
+            granted: current.granted,
+            denied: current.denied,
+            lastRead: folderLastRead(for: place)
+        )
+        guard updated != current else { return }
+        explainer.replaceLists(asked: updated.asked, granted: updated.granted, denied: updated.denied)
         save()
+        republishFolderLine()
+        delegate?.gridBackOfferFolderExplainer()
+    }
+
+    func openFolderPrivacySettings() {
+        delegate?.gridBackOpenPrivacySettings()
+    }
+
+    /// Applies a quiet re-check. The path is only the cache key and is not stored on the line.
+    func applyFolderRecheck(
+        succeeded: Bool,
+        place: WallpaperPathPlace,
+        path: String,
+        denial: FolderDenialCache
+    ) -> FolderDenialCache {
+        let current = FolderAccessLists(
+            asked: explainer.askedList,
+            granted: explainer.grantedList,
+            denied: explainer.deniedList
+        )
+        let result = FolderAccessEdits.recheck(
+            succeeded: succeeded,
+            place: place,
+            path: path,
+            modified: nil,
+            asked: current.asked,
+            granted: current.granted,
+            denied: current.denied,
+            denial: denial
+        )
+        if result.lists != current {
+            explainer.replaceLists(
+                asked: result.lists.asked,
+                granted: result.lists.granted,
+                denied: result.lists.denied
+            )
+            save()
+            republishFolderLine()
+        }
+        return result.denial
+    }
+
+    private func folderLastRead(for place: WallpaperPathPlace) -> FolderReadResult {
+        if explainer.denied.contains(place) { return .denied }
+        if explainer.granted.contains(place) { return .granted }
+        return .unknown
+    }
+
+    private func republishFolderLine() {
+        guard folderAccessReady else { return }
+        noteFolderSubject(place: folderAccessPlace, volumeKind: folderAccessVolumeKind)
     }
 
     /// The overlay calls this in the same turn it shows the backdrop. Nothing else writes the ink.

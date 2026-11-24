@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Settings shows whether GridBack can read the wallpaper's folder, and what to do next.
 - GridBack asks once, in a small window, before it opens a wallpaper in Desktop, Documents, Downloads, or on a removable disk. The window is visible on every Space. If macOS has already refused that folder, the plain fallback stays. An iCloud Drive image is opened only when it is already on this Mac. A shortcut pressed while the system folder prompt is open is ignored.
 - Groundwork for asking permission to show wallpapers from private folders.
 - Idle CPU in the open summary uses gaps of a minute or longer. Each open records how long the grid stayed closed, and the average over every gap is still shown.
