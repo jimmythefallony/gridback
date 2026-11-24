@@ -312,7 +312,6 @@ final class OverlayController: NSObject {
     /// An Aerial frame is grabbed here too, so a later open can use the cache.
     private func prewarmPicture() {
         guard !wantsGrid, let screen = PrimaryDisplay.screen() else { return }
-        DesktopPicture.dropRefusedFallback()
         let job = pictureJob(on: screen)
         notePicture(job)
         preparedKey = job.cacheKey
@@ -881,13 +880,8 @@ enum DesktopPicture {
             switch accessDecision {
             case .tryRead:
                 let local = protected.place == .icloud ? FolderFileLocality.isLocal(protected.path) : true
-                // A readability flag can stay false just after the folder is allowed.
-                // The blur render opens the file, so that flag does not keep the plain fill.
-                let pictureChoice = FolderPictureChoice.choose(
-                    decision: accessDecision,
-                    placeAllowsOpen: FolderProbePlan.shouldOpen(place: protected.place, alreadyLocal: local)
-                )
-                if pictureChoice == .openFile {
+                if FolderProbePlan.shouldOpen(place: protected.place, alreadyLocal: local),
+                   WallpaperFileAccess.look(protected.path, includingProtected: true)?.readable == true {
                     let source = decision.source == .none ? WallpaperSource.legacy : decision.source
                     decision = (source: source, use: .imageFile(protected.path), kind: .still)
                 } else {
@@ -997,24 +991,11 @@ enum DesktopPicture {
             }
             let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
             kind = WallpaperClassifier.kind(hints: read.hints, imageCount: read.imageCount)
-            let granted = picturePlace.isProtected && grantedLocations.contains(picturePlace)
-            let frame = GrantedPictureFrame.resolve(
-                classified: WallpaperClassifier.frame(
-                    kind: kind,
-                    hints: read.hints,
-                    appearance: appearance,
-                    imageCount: read.imageCount
-                ),
-                imageCount: read.imageCount,
-                accessGranted: granted
-            )
-            switch frame {
+            switch WallpaperClassifier.frame(kind: kind, hints: read.hints, appearance: appearance, imageCount: read.imageCount) {
             case .index(let index):
                 url = URL(fileURLWithPath: path)
                 imageIndex = index
-                kind = granted && read.imageCount == 0 ? .still : kind
                 token = path
-                color = nil
             case .plainBlur:
                 color = WallpaperNeutralFill.color(for: appearance)
                 token = "neutral"
@@ -1142,17 +1123,6 @@ enum DesktopPicture {
     static func store(_ image: NSImage, key: String) {
         cacheKey = key
         cache = image
-    }
-
-    /// Drops the plain picture that was kept while a folder was refused.
-    /// The next blur is built from the file, not from that fill.
-    static func dropRefusedFallback() {
-        guard let key = cacheKey,
-              WallpaperPictureStore.shouldDropRefusedFallback(cacheKey: key, accessAllowed: true) else {
-            return
-        }
-        cacheKey = nil
-        cache = nil
     }
 
     /// Decodes a small thumbnail before anything draws it. ImageIO otherwise waits

@@ -59,36 +59,6 @@ public enum FolderAccessStatus: String, CaseIterable, Equatable, Sendable {
 }
 
 /// The button beside the Settings line. Not allowed has no second ask.
-/// Whether a granted wallpaper file is opened, or the plain fallback is kept.
-/// A separate readability flag is not an input: it can stay false after the folder
-/// has just been allowed, and the open itself is the check that counts.
-public enum FolderPictureChoice: Equatable, Sendable {
-    case openFile
-    case plainFallback
-
-    public static func choose(decision: FolderAccessDecision, placeAllowsOpen: Bool) -> FolderPictureChoice {
-        if decision == .tryRead && placeAllowsOpen {
-            return .openFile
-        }
-        return .plainFallback
-    }
-}
-
-/// A metadata peek that finds no frame is not a reason to keep the plain fill.
-/// The blur render opens the file itself.
-public enum GrantedPictureFrame {
-    public static func resolve(
-        classified: WallpaperFrame,
-        imageCount: Int,
-        accessGranted: Bool
-    ) -> WallpaperFrame {
-        if accessGranted && imageCount == 0 {
-            return .index(0)
-        }
-        return classified
-    }
-}
-
 public enum FolderAccessAction: String, Equatable, Sendable {
     case allow
     case askAgain

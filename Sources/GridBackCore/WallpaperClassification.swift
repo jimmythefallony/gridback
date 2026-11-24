@@ -1246,24 +1246,6 @@ public enum WallpaperPictureStore {
     public static func shouldKeep(hasPicture: Bool, completedCacheKey: String, currentCacheKey: String) -> Bool {
         hasPicture && !completedCacheKey.isEmpty && completedCacheKey == currentCacheKey
     }
-
-    /// The part of a cache key that names the picture. A path is not interpreted here.
-    public static func cacheToken(_ cacheKey: String) -> String {
-        guard let bar = cacheKey.firstIndex(of: "|") else { return cacheKey }
-        return String(cacheKey[..<bar])
-    }
-
-    /// The plain picture kept while a folder was refused. Once that folder is allowed,
-    /// this picture is not the wallpaper and must not be shown again.
-    public static func shouldDropRefusedFallback(cacheKey: String, accessAllowed: Bool) -> Bool {
-        guard accessAllowed, !cacheKey.isEmpty else { return false }
-        switch cacheToken(cacheKey) {
-        case "protected", "unreadable":
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 public enum WallpaperLogName {
