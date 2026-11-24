@@ -394,18 +394,57 @@ enum FolderAccessRead {
     /// A call on the main thread returns without opening the file.
     /// The system prompt needs the main thread, so this read must not occupy it.
     private static func readFirstBytes(path: String, place: WallpaperPathPlace) -> Bool {
-        if Thread.isMainThread { return false }
+        readOutcome(path: path, place: place).ok
+    }
+
+    /// The same 16-byte read. 0 means the bytes were read. A negative number means the file was not opened.
+    static func errnoOfFirstBytes(path: String, place: WallpaperPathPlace) -> Int32 {
+        readOutcome(path: path, place: place).errno
+    }
+
+    private static func readOutcome(path: String, place: WallpaperPathPlace) -> (ok: Bool, errno: Int32) {
+        if Thread.isMainThread { return (false, -1) }
         let normalized = WallpaperPathPlace.normalized(path)
-        guard WallpaperPathPlace.classify(normalized) == place else { return false }
+        guard WallpaperPathPlace.classify(normalized) == place else { return (false, -1) }
         let local = place == .icloud ? FolderFileLocality.isLocal(normalized) : true
-        guard FolderProbePlan.shouldOpen(place: place, alreadyLocal: local) else { return false }
+        guard FolderProbePlan.shouldOpen(place: place, alreadyLocal: local) else { return (false, -1) }
         do {
             let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: normalized))
             defer { try? handle.close() }
             _ = try handle.read(upToCount: 16)
-            return true
+            return (true, 0)
         } catch {
-            return false
+            return (false, posixCode(error))
+        }
+    }
+
+    private static func posixCode(_ error: Error) -> Int32 {
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain {
+            return ns.code == 0 ? -1 : Int32(ns.code)
+        }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSPOSIXErrorDomain {
+            return underlying.code == 0 ? -1 : Int32(underlying.code)
+        }
+        return ns.code == 0 ? -1 : Int32(ns.code)
+    }
+}
+
+/// The Settings 16-byte read, used only to measure a folder that is already allowed.
+/// It does not mark a system prompt as waiting, and it does not share that read's queue.
+enum DiagnosticRead {
+    private static let queue = DispatchQueue(
+        label: "com.jimmythefallony.GridBack.folder-diagnostic",
+        qos: .utility
+    )
+
+    static func sample(path: String, place: WallpaperPathPlace, done: @escaping (Int32) -> Void) {
+        queue.async {
+            let errno = FolderAccessRead.errnoOfFirstBytes(path: path, place: place)
+            DispatchQueue.main.async {
+                done(errno)
+            }
         }
     }
 }

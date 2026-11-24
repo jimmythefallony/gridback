@@ -15,6 +15,8 @@ final class OverlayController: NSObject {
     private var screenObserver: NSObjectProtocol?
     /// Bumps on each show so a delayed pass cannot reopen a grid that already closed.
     private var showGeneration = 0
+    /// How many times the grid has opened in this launch. Closing does not increment it.
+    private var openCount = 0
     /// One dismiss per open. Toggling twice would show the system launcher again.
     private var didDismissSystemLauncher = false
     private var escapeMonitor: Any?
@@ -80,7 +82,9 @@ final class OverlayController: NSObject {
         }
         wantsGrid = true
         showGeneration += 1
+        openCount += 1
         let generation = showGeneration
+        let openedAs = openCount
         let createdPanel = self.panel == nil
         let panel = self.panel ?? makePanel(on: screen, model: model)
         self.panel = panel
@@ -101,7 +105,7 @@ final class OverlayController: NSObject {
         dismissSystemLauncherIfNeeded()
         installEscapeMonitor()
         startDockWatch()
-        ensurePicture(generation: generation, on: screen)
+        ensurePicture(generation: generation, on: screen, opening: openedAs)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.showGeneration == generation, self.wantsGrid else { return }
             self.claimKeyboard()
@@ -328,11 +332,16 @@ final class OverlayController: NSObject {
     /// so the sharp wallpaper never flashes.
     /// An Aerial miss shows the plain fallback immediately. The frame is grabbed
     /// off the main thread and fades in when it is ready. `show()` does not wait.
-    private func ensurePicture(generation: Int, on screen: NSScreen) {
+    /// `opening` is set only from `show()`, so a relayout does not count as another open.
+    private func ensurePicture(generation: Int, on screen: NSScreen, opening: Int? = nil) {
         let job = pictureJob(on: screen)
         notePicture(job)
         pictureKey = job.cacheKey
         preparedKey = job.cacheKey
+        if let opening {
+            logGridOpen(job, openedAs: opening)
+            logAllowedReadIfSafe(job, openedAs: opening)
+        }
         if let image = DesktopPicture.cached(job.cacheKey) {
             applyPicture(image, job: job)
             revealGrid()
@@ -352,6 +361,59 @@ final class OverlayController: NSObject {
             return
         }
         startPictureRender(job, generation: generation)
+    }
+
+    private func logGridOpen(_ job: DesktopPictureJob, openedAs: Int) {
+        let place = DiagnosticPlace(job.folderPlace)
+        let asked = membership(job.folderPlace, in: model?.folderAsked)
+        let granted = membership(job.folderPlace, in: model?.folderGranted)
+        let refused = membership(job.folderPlace, in: model?.folderDenied)
+        let decision = DiagnosticDecision(job.policyDecision)
+        let cache: DiagnosticCache = DesktopPicture.cached(job.cacheKey) == nil ? .miss : .hit
+        let inflight = inflightPictureKey == job.cacheKey ? 1 : 0
+        let inflightIdentity = inflightPictureKey.map { Int(DiagnosticPathHash.number(for: $0)) } ?? -1
+        let identity = Int(DiagnosticPathHash.number(for: job.cacheKey))
+        let ms = DiagnosticClock.milliseconds
+        log.info("grid open ms=\(ms, privacy: .public) n=\(openedAs, privacy: .public) place=\(place, privacy: .public) asked=\(asked, privacy: .public) granted=\(granted, privacy: .public) refused=\(refused, privacy: .public) decision=\(decision, privacy: .public) exists=\(job.lookedExists, privacy: .public) readable=\(job.lookedReadable, privacy: .public) images=\(job.metadataCount, privacy: .public) kind=\(job.identityKind, privacy: .public) identity=\(identity, privacy: .public) cache=\(cache, privacy: .public) inflight=\(inflight, privacy: .public) inflightIdentity=\(inflightIdentity, privacy: .public)")
+    }
+
+    /// The 16-byte read Settings uses, only after the place is already Allowed.
+    /// A folder that has not been allowed is left untouched, so this cannot raise a prompt.
+    private func logAllowedReadIfSafe(_ job: DesktopPictureJob, openedAs: Int) {
+        guard let place = job.folderPlace, let path = job.diagnosticPath else { return }
+        let asked = model?.folderAsked.contains(place) == true
+        let granted = model?.folderGranted.contains(place) == true
+        let refused = model?.folderDenied.contains(place) == true
+        let lastRead: FolderReadResult = refused ? .denied : (granted ? .granted : .unknown)
+        let status = FolderAccessStatus.make(
+            place: place,
+            volumeKind: job.folderVolumeKind,
+            asked: asked,
+            granted: granted,
+            denied: refused,
+            lastRead: lastRead
+        )
+        guard status == .allowed else { return }
+        let gridHash = Int(DiagnosticPathHash.number(for: path))
+        DiagnosticRead.sample(path: path, place: place) { [weak self] errno in
+            guard let self else { return }
+            let probe = DiagnosticProbeNote.current
+            let probeHash = probe.map(Int.init) ?? 0
+            let haveProbe = probe == nil ? 0 : 1
+            let same = probe.map(Int.init) == Optional(gridHash) ? 1 : 0
+            let ms = DiagnosticClock.milliseconds
+            let code = Int(errno)
+            if code == 0 {
+                self.log.info("grid read ms=\(ms, privacy: .public) n=\(openedAs, privacy: .public) read=ok errno=\(code, privacy: .public) gridHash=\(gridHash, privacy: .public) probeHash=\(probeHash, privacy: .public) haveProbe=\(haveProbe, privacy: .public) same=\(same, privacy: .public)")
+            } else {
+                self.log.info("grid read ms=\(ms, privacy: .public) n=\(openedAs, privacy: .public) errno=\(code, privacy: .public) gridHash=\(gridHash, privacy: .public) probeHash=\(probeHash, privacy: .public) haveProbe=\(haveProbe, privacy: .public) same=\(same, privacy: .public)")
+            }
+        }
+    }
+
+    private func membership(_ place: WallpaperPathPlace?, in places: Set<WallpaperPathPlace>?) -> Int {
+        guard let place, let places else { return 0 }
+        return places.contains(place) ? 1 : 0
     }
 
     private func notePicture(_ job: DesktopPictureJob) {
@@ -394,20 +456,26 @@ final class OverlayController: NSObject {
         let key = job.cacheKey
         guard inflightPictureKey != key else { return }
         inflightPictureKey = key
+        let openedAs = openCount
+        let identity = Int(DiagnosticPathHash.number(for: key))
+        log.info("render start ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public)")
         log.info("DesktopPicture schedule main=\(Thread.isMainThread, privacy: .public)")
         OffMainWork.start {
             let onMain = Thread.isMainThread
             let qos = Int(qos_class_self().rawValue)
             let started = DispatchTime.now().uptimeNanoseconds
-            let image = DesktopPicture.render(job)
+            let report = DesktopPicture.renderReport(job)
             let milliseconds = Int((DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000)
-            return (onMain, qos, milliseconds, image)
+            return (onMain, qos, milliseconds, report.image, report.readErrno)
         } apply: { [weak self] result in
             guard let self else { return }
             if self.inflightPictureKey == key {
                 self.inflightPictureKey = nil
             }
-            let (renderedOnMain, qos, milliseconds, cgImage) = result
+            let (renderedOnMain, qos, milliseconds, cgImage, readErrno) = result
+            let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
+            let errno = cgImage == nil ? Int(readErrno) : 0
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errno=\(errno, privacy: .public)")
             self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
             if let image, WallpaperPictureStore.shouldKeep(
@@ -423,7 +491,8 @@ final class OverlayController: NSObject {
                 image: image,
                 job: job,
                 generation: applyGeneration,
-                cacheKey: key
+                cacheKey: key,
+                openedAs: openedAs
             )
         }
     }
@@ -436,6 +505,9 @@ final class OverlayController: NSObject {
         guard aerialInFlightKey != key, aerialFailedKey != key else { return }
         aerialInFlightKey = key
         inflightPictureKey = key
+        let openedAs = openCount
+        let identity = Int(DiagnosticPathHash.number(for: key))
+        log.info("render start ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public)")
         log.info("DesktopPicture aerial schedule main=\(Thread.isMainThread, privacy: .public)")
         OffMainWork.start {
             let onMain = Thread.isMainThread
@@ -459,6 +531,8 @@ final class OverlayController: NSObject {
                 self.aerialInFlightKey = nil
             }
             let (renderedOnMain, qos, milliseconds, cgImage) = result
+            let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errno=\(0, privacy: .public)")
             self.log.info("DesktopPicture aerial render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             guard let cgImage else {
                 self.aerialFailedKey = key
@@ -478,7 +552,8 @@ final class OverlayController: NSObject {
                 image: image,
                 job: job,
                 generation: applyGeneration,
-                cacheKey: key
+                cacheKey: key,
+                openedAs: openedAs
             )
         }
     }
@@ -490,16 +565,21 @@ final class OverlayController: NSObject {
         image: NSImage?,
         job: DesktopPictureJob?,
         generation: Int,
-        cacheKey: String
+        cacheKey: String,
+        openedAs: Int
     ) {
-        switch WallpaperBackdropChoice.choose(
+        let outcome = WallpaperBackdropChoice.choose(
             hasPicture: hasPicture,
             completedGeneration: generation,
             completedCacheKey: cacheKey,
             currentGeneration: showGeneration,
             currentCacheKey: pictureKey ?? "",
             stillWanted: wantsGrid
-        ) {
+        )
+        let scheduledIdentity = Int(DiagnosticPathHash.number(for: cacheKey))
+        let currentIdentity = Int(DiagnosticPathHash.number(for: pictureKey ?? ""))
+        log.info("present ms=\(DiagnosticClock.milliseconds, privacy: .public) outcome=\(DiagnosticOutcome(outcome), privacy: .public) scheduledOpen=\(openedAs, privacy: .public) currentOpen=\(openCount, privacy: .public) scheduledIdentity=\(scheduledIdentity, privacy: .public) currentIdentity=\(currentIdentity, privacy: .public)")
+        switch outcome {
         case .ignore:
             log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
         case .plainBlur:
@@ -716,6 +796,18 @@ struct DesktopPictureJob {
     /// The protected place this picture came from, when there is one. Logged by name only.
     var folderPlace: WallpaperPathPlace? = nil
     var folderDecision: FolderAccessDecision? = nil
+    /// FolderAccessPolicy's answer, before a failed look replaces folderDecision.
+    var policyDecision: FolderAccessDecision? = nil
+    var folderVolumeKind: FolderVolumeKind = .none
+    /// The picture path this open settled on. Used for the diagnostic read. Never logged.
+    var diagnosticPath: String? = nil
+    var identityKind: DiagnosticIdentity = .plain
+    /// -1 when fileExists was not called. Otherwise 0 or 1.
+    var lookedExists: Int = -1
+    /// -1 when isReadableFile was not called. Otherwise 0 or 1.
+    var lookedReadable: Int = -1
+    /// -1 when image metadata was not read.
+    var metadataCount: Int = -1
 
     var prefersPlainBlur: Bool { url == nil && solidColor == nil }
 }
@@ -836,13 +928,27 @@ enum DesktopPicture {
             imageFileReadable: access.usablePath != nil,
             storeFileExists: access.storeFileExists
         )
+        var notedPath: String?
+        var lookedExists = -1
+        var lookedReadable = -1
+        var metadataCount = -1
+        var identityKind = DiagnosticIdentity.plain
+        var notedVolume = FolderVolumeKind.none
+        var policyDecision: FolderAccessDecision?
         if case .imageFile(let path) = decision.use {
-            if WallpaperFileAccess.look(path) == nil {
+            notedPath = path
+            let first = WallpaperFileAccess.look(path)
+            if first == nil {
                 decision = (source: decision.source, use: .plainBlur, kind: .fallback)
             } else if access.usablePath != path, let looked = WallpaperFileAccess.look(path), !looked.readable {
+                lookedExists = looked.exists ? 1 : 0
+                lookedReadable = looked.readable ? 1 : 0
                 decision = looked.exists
                     ? (source: decision.source, use: .plainBlur, kind: .unreadable)
                     : (source: decision.source, use: .plainBlur, kind: .fallback)
+            } else if let first {
+                lookedExists = first.exists ? 1 : 0
+                lookedReadable = first.readable ? 1 : 0
             }
         }
         let resolvedUseIsFile: Bool
@@ -868,7 +974,13 @@ enum DesktopPicture {
         var askPlace: WallpaperPathPlace?
         var askVolumeKind = FolderVolumeKind.none
         if let protected {
+            if notedPath != protected.path {
+                lookedExists = -1
+                lookedReadable = -1
+            }
+            notedPath = protected.path
             let volumeKind = FolderVolumeKindProbe.kind(path: protected.path)
+            notedVolume = volumeKind
             let accessDecision = FolderAccessPolicy.decide(
                 place: protected.place,
                 askedLocations: askedLocations,
@@ -877,13 +989,20 @@ enum DesktopPicture {
             )
             folderPlace = protected.place
             folderDecision = accessDecision
+            policyDecision = accessDecision
             switch accessDecision {
             case .tryRead:
                 let local = protected.place == .icloud ? FolderFileLocality.isLocal(protected.path) : true
                 if FolderProbePlan.shouldOpen(place: protected.place, alreadyLocal: local),
-                   WallpaperFileAccess.look(protected.path, includingProtected: true)?.readable == true {
-                    let source = decision.source == .none ? WallpaperSource.legacy : decision.source
-                    decision = (source: source, use: .imageFile(protected.path), kind: .still)
+                   let looked = WallpaperFileAccess.look(protected.path, includingProtected: true) {
+                    lookedExists = looked.exists ? 1 : 0
+                    lookedReadable = looked.readable ? 1 : 0
+                    if looked.readable {
+                        let source = decision.source == .none ? WallpaperSource.legacy : decision.source
+                        decision = (source: source, use: .imageFile(protected.path), kind: .still)
+                    } else {
+                        folderDecision = .fallback
+                    }
                 } else {
                     folderDecision = .fallback
                 }
@@ -977,6 +1096,7 @@ enum DesktopPicture {
         var token = "plain"
         switch decision.use {
         case .imageFile(let path):
+            notedPath = path
             let picturePlace = WallpaperPathPlace.classify(path)
             if picturePlace.isProtected {
                 let local = picturePlace == .icloud ? FolderFileLocality.isLocal(path) : true
@@ -986,35 +1106,43 @@ enum DesktopPicture {
                     kind = .fallback
                     color = WallpaperNeutralFill.color(for: .dark)
                     token = "protected"
+                    identityKind = .protected
                     break
                 }
             }
             let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
+            metadataCount = read.imageCount
             kind = WallpaperClassifier.kind(hints: read.hints, imageCount: read.imageCount)
             switch WallpaperClassifier.frame(kind: kind, hints: read.hints, appearance: appearance, imageCount: read.imageCount) {
             case .index(let index):
                 url = URL(fileURLWithPath: path)
                 imageIndex = index
                 token = path
+                identityKind = .file
             case .plainBlur:
                 color = WallpaperNeutralFill.color(for: appearance)
                 token = "neutral"
+                identityKind = .neutral
             }
         case .solid(let fill):
             kind = .solidColor
             color = fill
             token = colorToken(fill)
+            identityKind = .plain
         case .plainBlur:
             kind = decision.kind
             if decision.kind == .unreadable {
                 color = WallpaperNeutralFill.color(for: .dark)
                 token = "unreadable"
+                identityKind = .unreadable
             } else if skippingProtected {
                 color = WallpaperNeutralFill.color(for: .dark)
                 token = "protected"
+                identityKind = .protected
             } else {
                 color = WallpaperNeutralFill.color(for: appearance)
                 token = "neutral"
+                identityKind = .neutral
             }
         }
         var shownAerial: String?
@@ -1026,15 +1154,25 @@ enum DesktopPicture {
                 color = nil
                 token = assetID
                 shownAerial = assetID
+                identityKind = .file
+                notedPath = movie.path
+                lookedExists = -1
+                lookedReadable = -1
+                metadataCount = -1
             } else {
                 kind = .fallback
                 url = nil
                 imageIndex = 0
                 color = WallpaperNeutralFill.color(for: appearance)
                 token = "neutral"
+                identityKind = .neutral
+                notedPath = nil
+                lookedExists = -1
+                lookedReadable = -1
+                metadataCount = -1
             }
         }
-        return DesktopPictureJob(
+        var built = DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
                 token: token,
                 pixelWidth: pixelW,
@@ -1074,6 +1212,14 @@ enum DesktopPicture {
             folderPlace: folderPlace,
             folderDecision: folderDecision
         )
+        built.policyDecision = policyDecision
+        built.folderVolumeKind = notedVolume
+        built.diagnosticPath = url?.path ?? notedPath
+        built.identityKind = identityKind
+        built.lookedExists = lookedExists
+        built.lookedReadable = lookedReadable
+        built.metadataCount = metadataCount
+        return built
     }
 
     private static func colorToken(_ color: WallpaperSolidColor?) -> String {
@@ -1125,19 +1271,31 @@ enum DesktopPicture {
         cache = image
     }
 
+    struct RenderReport {
+        var image: CGImage?
+        var readErrno: Int32
+    }
+
     /// Decodes a small thumbnail before anything draws it. ImageIO otherwise waits
     /// until the draw to decode the full image.
-    private static func decodedThumbnail(at url: URL, index: Int, maxPixelSize: Int) -> CGImage? {
-        guard index >= 0 else { return nil }
+    private static func decodedThumbnail(at url: URL, index: Int, maxPixelSize: Int) -> (image: CGImage?, errno: Int32) {
+        guard index >= 0 else { return (nil, 0) }
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        errno = 0
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return (nil, errno)
+        }
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, index, thumbnailOptions as CFDictionary)
+        errno = 0
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, index, thumbnailOptions as CFDictionary) else {
+            return (nil, errno)
+        }
+        return (image, 0)
     }
 
     /// Blurs the desktop picture on the calling thread.
@@ -1145,6 +1303,10 @@ enum DesktopPicture {
     /// decode a full-size image. The blur radius uses that same scale. Core Image is not used.
     /// `frame` is an Aerial still that was already grabbed. Passing it skips ImageIO.
     static func render(_ job: DesktopPictureJob, frame supplied: CGImage? = nil) -> CGImage? {
+        renderReport(job, frame: supplied).image
+    }
+
+    static func renderReport(_ job: DesktopPictureJob, frame supplied: CGImage? = nil) -> RenderReport {
         let interval = signposter.beginInterval("WallpaperRender")
         defer { signposter.endInterval("WallpaperRender", interval) }
         let plan = WallpaperRenderSize.make(
@@ -1154,7 +1316,7 @@ enum DesktopPicture {
         )
         let width = plan.width
         let height = plan.height
-        guard width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0 else { return RenderReport(image: nil, readErrno: 0) }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         guard let context = CGContext(
@@ -1165,7 +1327,7 @@ enum DesktopPicture {
             bytesPerRow: width * 4,
             space: colorSpace,
             bitmapInfo: bitmapInfo
-        ), let pixels = context.data else { return nil }
+        ), let pixels = context.data else { return RenderReport(image: nil, readErrno: 0) }
         context.interpolationQuality = .medium
         if supplied == nil, let color = job.solidColor {
             context.setFillColor(CGColor(
@@ -1177,23 +1339,36 @@ enum DesktopPicture {
             context.fill(CGRect(x: 0, y: 0, width: width, height: height))
             // Same veil the ink decision used for this fill.
             let veil = InkContrast.forFill(color).veil
-            return dimmed(context, width: width, height: height, veil: veil)
-        } else if let wallpaper = supplied ?? job.url.flatMap({ decodedThumbnail(at: $0, index: job.imageIndex, maxPixelSize: plan.maxPixelSize) }) {
-            let srcW = CGFloat(wallpaper.width)
-            let srcH = CGFloat(wallpaper.height)
-            guard srcW > 0, srcH > 0 else { return nil }
-            let pixelW = CGFloat(width)
-            let pixelH = CGFloat(height)
-            let fit = max(pixelW / srcW, pixelH / srcH)
-            let drawnW = srcW * fit
-            let drawnH = srcH * fit
-            context.draw(
-                wallpaper,
-                in: CGRect(x: (pixelW - drawnW) / 2, y: (pixelH - drawnH) / 2, width: drawnW, height: drawnH)
-            )
-        } else {
-            return nil
+            return RenderReport(image: dimmed(context, width: width, height: height, veil: veil), readErrno: 0)
         }
+        let wallpaper: CGImage?
+        var readErrno: Int32 = 0
+        if let supplied {
+            wallpaper = supplied
+        } else if let url = job.url {
+            let decoded = decodedThumbnail(at: url, index: job.imageIndex, maxPixelSize: plan.maxPixelSize)
+            wallpaper = decoded.image
+            if decoded.image == nil {
+                readErrno = decoded.errno
+            }
+        } else {
+            wallpaper = nil
+        }
+        guard let wallpaper else {
+            return RenderReport(image: nil, readErrno: readErrno)
+        }
+        let srcW = CGFloat(wallpaper.width)
+        let srcH = CGFloat(wallpaper.height)
+        guard srcW > 0, srcH > 0 else { return RenderReport(image: nil, readErrno: 0) }
+        let pixelW = CGFloat(width)
+        let pixelH = CGFloat(height)
+        let fit = max(pixelW / srcW, pixelH / srcH)
+        let drawnW = srcW * fit
+        let drawnH = srcH * fit
+        context.draw(
+            wallpaper,
+            in: CGRect(x: (pixelW - drawnW) / 2, y: (pixelH - drawnH) / 2, width: drawnW, height: drawnH)
+        )
         var sourceBuffer = vImage_Buffer(
             data: pixels,
             height: vImagePixelCount(height),
@@ -1208,7 +1383,7 @@ enum DesktopPicture {
             32,
             vImage_Flags(kvImageNoFlags)
         )
-        guard allocated == kvImageNoError, scratch.data != nil else { return nil }
+        guard allocated == kvImageNoError, scratch.data != nil else { return RenderReport(image: nil, readErrno: 0) }
         defer { free(scratch.data) }
         let sigma = plan.sigma
         var resultInScratch = false
@@ -1226,15 +1401,15 @@ enum DesktopPicture {
                     &sourceBuffer, &scratch, nil, 0, 0, size, size, nil, vImage_Flags(kvImageEdgeExtend)
                 )
             }
-            guard error == kvImageNoError else { return nil }
+            guard error == kvImageNoError else { return RenderReport(image: nil, readErrno: 0) }
             resultInScratch.toggle()
         }
         if resultInScratch {
             guard vImageCopyBuffer(&scratch, &sourceBuffer, 4, vImage_Flags(kvImageNoFlags)) == kvImageNoError else {
-                return nil
+                return RenderReport(image: nil, readErrno: 0)
             }
         }
-        return dimmed(context, width: width, height: height, veil: WallpaperDim.black)
+        return RenderReport(image: dimmed(context, width: width, height: height, veil: WallpaperDim.black), readErrno: 0)
     }
 
     /// Black veil. A flat fill uses the veil chosen with its ink. A photo keeps the normal veil.
@@ -1694,5 +1869,217 @@ enum ScreenReserveReader {
             visibleWidth: Double(visible.size.width),
             visibleHeight: Double(visible.size.height)
         )
+    }
+}
+
+/// Milliseconds since this process entered `main`.
+enum DiagnosticClock {
+    private static var started = DispatchTime.now().uptimeNanoseconds
+
+    static func arm() {
+        started = DispatchTime.now().uptimeNanoseconds
+    }
+
+    static var milliseconds: Int {
+        Int((DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000)
+    }
+}
+
+/// The last Settings probe's path hash. The path itself is not kept.
+enum DiagnosticProbeNote {
+    private static let lock = NSLock()
+    private static var stored: UInt32?
+
+    static func record(_ hash: UInt32) {
+        lock.lock()
+        stored = hash
+        lock.unlock()
+    }
+
+    static var current: UInt32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+}
+
+enum DiagnosticPlace {
+    case none
+    case desktop
+    case documents
+    case downloads
+    case pictures
+    case photos
+    case icloud
+    case volumes
+    case system
+    case other
+
+    init(_ place: WallpaperPathPlace?) {
+        switch place {
+        case nil: self = .none
+        case .desktop: self = .desktop
+        case .documents: self = .documents
+        case .downloads: self = .downloads
+        case .pictures: self = .pictures
+        case .photosLibrary: self = .photos
+        case .icloud: self = .icloud
+        case .volumes: self = .volumes
+        case .system: self = .system
+        case .other: self = .other
+        }
+    }
+
+    var logName: String {
+        switch self {
+        case .none: return "none"
+        case .desktop: return "Desktop"
+        case .documents: return "Documents"
+        case .downloads: return "Downloads"
+        case .pictures: return "Pictures"
+        case .photos: return "Photos"
+        case .icloud: return "iCloud"
+        case .volumes: return "Volumes"
+        case .system: return "System"
+        case .other: return "Other"
+        }
+    }
+}
+
+enum DiagnosticDecision {
+    case tryRead
+    case offerAsk
+    case fallback
+    case doNotTouch
+    case none
+
+    init(_ decision: FolderAccessDecision?) {
+        switch decision {
+        case .tryRead: self = .tryRead
+        case .offerAsk: self = .offerAsk
+        case .fallback: self = .fallback
+        case .doNotTouch: self = .doNotTouch
+        case nil: self = .none
+        }
+    }
+
+    var logName: String {
+        switch self {
+        case .tryRead: return "tryRead"
+        case .offerAsk: return "offerAsk"
+        case .fallback: return "fallback"
+        case .doNotTouch: return "doNotTouch"
+        case .none: return "none"
+        }
+    }
+}
+
+enum DiagnosticIdentity {
+    case file
+    case protected
+    case neutral
+    case unreadable
+    case plain
+
+    var logName: String {
+        switch self {
+        case .file: return "file"
+        case .protected: return "protected"
+        case .neutral: return "neutral"
+        case .unreadable: return "unreadable"
+        case .plain: return "plain"
+        }
+    }
+}
+
+enum DiagnosticCache {
+    case hit
+    case miss
+
+    var logName: String {
+        switch self {
+        case .hit: return "hit"
+        case .miss: return "miss"
+        }
+    }
+}
+
+enum DiagnosticRenderResult {
+    case success
+    case empty
+
+    var logName: String {
+        switch self {
+        case .success: return "success"
+        case .empty: return "nil"
+        }
+    }
+}
+
+enum DiagnosticOutcome {
+    case ignore
+    case plainBlur
+    case picture
+
+    init(_ backdrop: WallpaperBackdrop) {
+        switch backdrop {
+        case .ignore: self = .ignore
+        case .plainBlur: self = .plainBlur
+        case .picture: self = .picture
+        }
+    }
+
+    var logName: String {
+        switch self {
+        case .ignore: return "ignore"
+        case .plainBlur: return "plainBlur"
+        case .picture: return "picture"
+        }
+    }
+}
+
+enum DiagnosticProbeResult {
+    case granted
+    case denied
+
+    init(granted: Bool) {
+        self = granted ? .granted : .denied
+    }
+
+    var logName: String {
+        switch self {
+        case .granted: return "granted"
+        case .denied: return "denied"
+        }
+    }
+}
+
+extension OSLogInterpolation {
+    mutating func appendInterpolation(_ value: DiagnosticPlace, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticDecision, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticIdentity, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticCache, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticRenderResult, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticOutcome, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
+    }
+
+    mutating func appendInterpolation(_ value: DiagnosticProbeResult, privacy: OSLogPrivacy = .auto) {
+        appendInterpolation(value.logName, privacy: privacy)
     }
 }

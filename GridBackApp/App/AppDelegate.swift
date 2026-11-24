@@ -5,6 +5,7 @@ import os
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     static func main() {
+        DiagnosticClock.arm()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

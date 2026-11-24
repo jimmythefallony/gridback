@@ -106,6 +106,7 @@ final class FolderSettingsController {
     private var desktopObserver: NSObjectProtocol?
     private var activeObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.jimmythefallony.GridBack", category: "folder-access")
+    private let diagnosticLog = Logger(subsystem: "com.jimmythefallony.GridBack", category: "settings")
 
     private static let probeDelay: TimeInterval = 0.5
 
@@ -234,7 +235,12 @@ final class FolderSettingsController {
 
     private func completeProbe(granted: Bool, path: String, place: WallpaperPathPlace) {
         defer { endProbe() }
-        guard picture?.path == path, picture?.place == place, let model else { return }
+        let pathHash = DiagnosticPathHash.number(for: path)
+        DiagnosticProbeNote.record(pathHash)
+        guard picture?.path == path, picture?.place == place, let model else {
+            logSettingsProbe(granted: granted, pathHash: pathHash, prewarm: 0)
+            return
+        }
         denial = model.applyFolderRecheck(
             succeeded: granted,
             place: place,
@@ -243,9 +249,18 @@ final class FolderSettingsController {
         )
         let decision: FolderAccessDecision = granted ? .tryRead : .fallback
         log.info("\(FolderAccessLog.line(place: place, decision: decision), privacy: .public)")
-        if granted, model.isOverlayVisible != true {
+        let prewarm = granted && model.isOverlayVisible != true ? 1 : 0
+        logSettingsProbe(granted: granted, pathHash: pathHash, prewarm: prewarm)
+        if prewarm == 1 {
             overlay?.preparePictureForNextOpen()
         }
+    }
+
+    private func logSettingsProbe(granted: Bool, pathHash: UInt32, prewarm: Int) {
+        let result = DiagnosticProbeResult(granted: granted)
+        let hash = Int(pathHash)
+        let ms = DiagnosticClock.milliseconds
+        diagnosticLog.info("settings probe ms=\(ms, privacy: .public) result=\(result, privacy: .public) pathHash=\(hash, privacy: .public) prewarm=\(prewarm, privacy: .public)")
     }
 
     private func endProbe() {
