@@ -26,7 +26,7 @@ log stream --level info --predicate 'subsystem == "com.jimmythefallony.GridBack"
 
 ## Reading the lines
 
-Every diagnostic line starts with `ms`, the milliseconds since GridBack launched. Place names are words such as Downloads and Desktop. `identity`, `gridHash`, `probeHash`, and `pathHash` are short hashes, not paths.
+Every diagnostic line starts with `ms`, the milliseconds since GridBack launched. Place names are words such as Downloads and Desktop. `identity`, `gridHash`, `probeHash`, and `pathHash` are short hashes of a salt chosen once for this launch, plus the text. They match only within this launch. The salt stays in memory and is never logged.
 
 `grid open` is one line each time the grid opens. `n` is that open's number.
 
@@ -35,13 +35,13 @@ Every diagnostic line starts with `ms`, the milliseconds since GridBack launched
 - `exists` and `readable` are fileExists and isReadableFile. 1 is yes, 0 is no, and -1 means that check did not run.
 - `images` is the metadata image count, or -1 if metadata was not read.
 - `kind` is the identity that was chosen: `file`, `protected`, `neutral`, `unreadable`, or `plain`. A solid colour is `plain`.
-- `identity` hashes the cache identity. The same picture keeps the same number for this launch.
+- `identity` hashes the cache identity. The same picture keeps the same number for this launch, and a later launch uses a new salt.
 - `cache` is `hit` or `miss`.
 - `inflight` is 1 when a render of that same identity was already running. `inflightIdentity` is the hash of whatever render was running, or -1 if none was.
 
-`grid read` is the same 16-byte read Settings uses. It runs only when the place is already Allowed, on the path the grid chose, and off the main thread, so it cannot raise a prompt. There is no `grid read` line when the place is not Allowed. `read=ok` with `errno=0` means the bytes were read. Any other `errno` is the error number, and -1 means that shared read did not open the file. `same=1` means the Settings probe and the grid hashed the same path. `haveProbe=0` means Settings has not finished a probe in this launch, so `probeHash` is 0.
+`grid read` is the same 16-byte read Settings uses. It runs only when the place is already Allowed, on the path the grid chose, and off the main thread, so it cannot raise a prompt. This extra read is temporary and must be removed in the follow-up fix. There is no `grid read` line when the place is not Allowed. `read=ok` with `errno=0` means the bytes were read. Any other `errno` is the error number, and -1 means that shared read did not open the file. `same=1` means the Settings probe and the grid hashed the same path in this launch. `haveProbe=0` means Settings has not finished a probe in this launch, so `probeHash` is 0.
 
-`render start` and `render finish` use that same `identity` number. `result` is `success` or `nil`. `duration` is the render time in milliseconds. `errno` is the read error when the picture could not be opened, and 0 otherwise.
+`render start` and `render finish` use that same `identity` number. `result` is `success` or `nil`. `duration` is the render time in milliseconds. `errnoInfo` is informational only: ImageIO does not reliably set errno. `sourceNil` is 1 when `CGImageSourceCreateWithURL` returned nil. `sourceStatus` is `CGImageSourceGetStatus` when the thumbnail fails (`sourceStatusKnown` is 1). That status is 0 for complete, -1 for incomplete, -2 while reading the header, -3 for an unknown type, -4 for invalid data, and -5 for an unexpected end. When `sourceStatusKnown` is 0, `sourceStatus` was not taken.
 
 `present` is the choice after a render finishes. `outcome` is `ignore`, `plainBlur`, or `picture`. `scheduledOpen` is the open that started the render, and `currentOpen` is the open now. The two identity numbers are the render's and the grid's.
 

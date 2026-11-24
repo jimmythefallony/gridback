@@ -466,16 +466,16 @@ final class OverlayController: NSObject {
             let started = DispatchTime.now().uptimeNanoseconds
             let report = DesktopPicture.renderReport(job)
             let milliseconds = Int((DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000)
-            return (onMain, qos, milliseconds, report.image, report.readErrno)
+            return (onMain, qos, milliseconds, report.image, report.readErrno, report.sourceNil, report.sourceStatus, report.sourceStatusKnown)
         } apply: { [weak self] result in
             guard let self else { return }
             if self.inflightPictureKey == key {
                 self.inflightPictureKey = nil
             }
-            let (renderedOnMain, qos, milliseconds, cgImage, readErrno) = result
+            let (renderedOnMain, qos, milliseconds, cgImage, readErrno, sourceNil, sourceStatus, sourceStatusKnown) = result
             let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
-            let errno = cgImage == nil ? Int(readErrno) : 0
-            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errno=\(errno, privacy: .public)")
+            let errnoInfo = cgImage == nil ? Int(readErrno) : 0
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(errnoInfo, privacy: .public) sourceNil=\(sourceNil, privacy: .public) sourceStatusKnown=\(sourceStatusKnown, privacy: .public) sourceStatus=\(sourceStatus, privacy: .public)")
             self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
             if let image, WallpaperPictureStore.shouldKeep(
@@ -532,7 +532,7 @@ final class OverlayController: NSObject {
             }
             let (renderedOnMain, qos, milliseconds, cgImage) = result
             let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
-            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errno=\(0, privacy: .public)")
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(0, privacy: .public) sourceNil=\(0, privacy: .public) sourceStatusKnown=\(0, privacy: .public) sourceStatus=\(0, privacy: .public)")
             self.log.info("DesktopPicture aerial render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             guard let cgImage else {
                 self.aerialFailedKey = key
@@ -1273,17 +1273,23 @@ enum DesktopPicture {
 
     struct RenderReport {
         var image: CGImage?
+        /// Informational. ImageIO does not reliably set errno.
         var readErrno: Int32
+        /// 1 when CGImageSourceCreateWithURL returned nil.
+        var sourceNil: Int = 0
+        /// CGImageSourceGetStatus when the thumbnail fails. Meaningful only when sourceStatusKnown is 1.
+        var sourceStatus: Int = 0
+        var sourceStatusKnown: Int = 0
     }
 
     /// Decodes a small thumbnail before anything draws it. ImageIO otherwise waits
     /// until the draw to decode the full image.
-    private static func decodedThumbnail(at url: URL, index: Int, maxPixelSize: Int) -> (image: CGImage?, errno: Int32) {
-        guard index >= 0 else { return (nil, 0) }
+    private static func decodedThumbnail(at url: URL, index: Int, maxPixelSize: Int) -> (image: CGImage?, errno: Int32, sourceNil: Int, sourceStatus: Int, sourceStatusKnown: Int) {
+        guard index >= 0 else { return (nil, 0, 0, 0, 0) }
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         errno = 0
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
-            return (nil, errno)
+            return (nil, errno, 1, 0, 0)
         }
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -1293,9 +1299,9 @@ enum DesktopPicture {
         ]
         errno = 0
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, index, thumbnailOptions as CFDictionary) else {
-            return (nil, errno)
+            return (nil, errno, 0, Int(CGImageSourceGetStatus(source).rawValue), 1)
         }
-        return (image, 0)
+        return (image, 0, 0, 0, 0)
     }
 
     /// Blurs the desktop picture on the calling thread.
@@ -1343,6 +1349,9 @@ enum DesktopPicture {
         }
         let wallpaper: CGImage?
         var readErrno: Int32 = 0
+        var sourceNil = 0
+        var sourceStatus = 0
+        var sourceStatusKnown = 0
         if let supplied {
             wallpaper = supplied
         } else if let url = job.url {
@@ -1350,12 +1359,21 @@ enum DesktopPicture {
             wallpaper = decoded.image
             if decoded.image == nil {
                 readErrno = decoded.errno
+                sourceNil = decoded.sourceNil
+                sourceStatus = decoded.sourceStatus
+                sourceStatusKnown = decoded.sourceStatusKnown
             }
         } else {
             wallpaper = nil
         }
         guard let wallpaper else {
-            return RenderReport(image: nil, readErrno: readErrno)
+            return RenderReport(
+                image: nil,
+                readErrno: readErrno,
+                sourceNil: sourceNil,
+                sourceStatus: sourceStatus,
+                sourceStatusKnown: sourceStatusKnown
+            )
         }
         let srcW = CGFloat(wallpaper.width)
         let srcH = CGFloat(wallpaper.height)
