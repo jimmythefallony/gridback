@@ -275,6 +275,121 @@ final class FolderAccessStatusTests: XCTestCase {
         XCTAssertEqual(FolderAccessStatusCopy.placePhrase(.volumes, volumeKind: .network), "On a network disk")
     }
 
+    func testAllowingARefusedFolderDropsThePlainPictureAndOpensTheFile() {
+        XCTAssertEqual(
+            FolderPictureChoice.choose(decision: .tryRead, placeAllowsOpen: true),
+            .openFile
+        )
+        XCTAssertEqual(
+            FolderPictureChoice.choose(decision: .fallback, placeAllowsOpen: true),
+            .plainFallback
+        )
+        XCTAssertEqual(
+            FolderPictureChoice.choose(decision: .offerAsk, placeAllowsOpen: true),
+            .plainFallback
+        )
+        XCTAssertEqual(
+            FolderPictureChoice.choose(decision: .doNotTouch, placeAllowsOpen: true),
+            .plainFallback
+        )
+        XCTAssertEqual(
+            FolderPictureChoice.choose(decision: .tryRead, placeAllowsOpen: false),
+            .plainFallback
+        )
+
+        let plainKey = WallpaperCacheIdentity.key(
+            token: "protected",
+            pixelWidth: 100,
+            pixelHeight: 80,
+            appearance: .dark,
+            kind: .fallback,
+            imageIndex: nil
+        )
+        let unreadKey = WallpaperCacheIdentity.key(
+            token: "unreadable",
+            pixelWidth: 100,
+            pixelHeight: 80,
+            appearance: .dark,
+            kind: .unreadable,
+            imageIndex: nil
+        )
+        let pictureKey = WallpaperCacheIdentity.key(
+            token: "picture",
+            pixelWidth: 100,
+            pixelHeight: 80,
+            appearance: .dark,
+            kind: .still,
+            imageIndex: 0
+        )
+        XCTAssertTrue(WallpaperPictureStore.shouldDropRefusedFallback(cacheKey: plainKey, accessAllowed: true))
+        XCTAssertTrue(WallpaperPictureStore.shouldDropRefusedFallback(cacheKey: unreadKey, accessAllowed: true))
+        XCTAssertFalse(WallpaperPictureStore.shouldDropRefusedFallback(cacheKey: plainKey, accessAllowed: false))
+        XCTAssertFalse(WallpaperPictureStore.shouldDropRefusedFallback(cacheKey: pictureKey, accessAllowed: true))
+        XCTAssertFalse(
+            WallpaperPictureStore.shouldKeep(
+                hasPicture: true,
+                completedCacheKey: plainKey,
+                currentCacheKey: pictureKey
+            )
+        )
+
+        let before = FolderAccessStatus.make(
+            place: .downloads,
+            volumeKind: .none,
+            asked: true,
+            granted: false,
+            denied: true,
+            lastRead: .denied
+        )
+        let after = FolderAccessStatus.make(
+            place: .downloads,
+            volumeKind: .none,
+            asked: true,
+            granted: true,
+            denied: false,
+            lastRead: .granted
+        )
+        XCTAssertEqual(before, .notAllowed)
+        XCTAssertEqual(after, .allowed)
+        XCTAssertEqual(
+            GrantedPictureFrame.resolve(classified: .plainBlur, imageCount: 0, accessGranted: true),
+            .index(0)
+        )
+        XCTAssertEqual(
+            GrantedPictureFrame.resolve(classified: .plainBlur, imageCount: 2, accessGranted: true),
+            .plainBlur
+        )
+        XCTAssertEqual(
+            GrantedPictureFrame.resolve(classified: .index(1), imageCount: 2, accessGranted: true),
+            .index(1)
+        )
+
+        // The grid is already open and waiting on the new picture. The blur is shown
+        // for this open, not held until the next one.
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: true,
+                completedGeneration: 3,
+                completedCacheKey: pictureKey,
+                currentGeneration: 3,
+                currentCacheKey: pictureKey,
+                stillWanted: true
+            ),
+            .picture
+        )
+        XCTAssertEqual(
+            WallpaperBackdropChoice.choose(
+                hasPicture: false,
+                completedGeneration: 3,
+                completedCacheKey: plainKey,
+                currentGeneration: 3,
+                currentCacheKey: pictureKey,
+                stillWanted: true
+            ),
+            .ignore
+        )
+    }
+
     func testPictureTargetUsesPathTextAndSkipsColourAndAerial() {
         let pictures = FolderAccessTarget.picture(
             provider: WallpaperStoreIndex.imageProvider,
