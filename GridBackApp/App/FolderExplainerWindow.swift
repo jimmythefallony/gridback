@@ -55,6 +55,10 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
         suspend()
     }
 
+    var isVisible: Bool {
+        window?.isVisible == true
+    }
+
     /// The grid just closed. Returns true when the explainer is on screen.
     func gridClosed() -> Bool {
         considerCurrentWallpaper()

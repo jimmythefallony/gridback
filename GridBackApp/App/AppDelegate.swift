@@ -62,10 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     }
 
     func gridBackHideOverlay() {
-        overlay.hide()
-        let explaining = folderAccess.gridClosed()
-        if !settings.isVisible && !explaining {
-            NSApp.hide(nil)
+        _ = folderAccess.gridClosed()
+        // Hiding the app here cuts the fade off, so it waits until the windows are gone.
+        overlay.hide { [weak self] in
+            guard let self else { return }
+            if !self.settings.isVisible && !self.folderAccess.isVisible {
+                NSApp.hide(nil)
+            }
         }
     }
 

@@ -40,6 +40,11 @@ struct OverlayRootView: View {
     @State private var absorbingIntoFolder = false
     @State private var pendingClosedDrop: PendingClosedDrop?
     @State private var closedDropToken = 0
+    @State private var iconPageScale: CGFloat = CGFloat(GridFade.iconScale)
+    @State private var iconPageOpacity: Double = 0
+    @State private var appliedIconPhase: GridFade.Phase = .closed
+    @State private var overlayDismissalPending = false
+    @State private var iconMotion = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var iconDragActive: Bool {
@@ -84,8 +89,12 @@ struct OverlayRootView: View {
                             .padding(.leading, chrome.originX)
                             .padding(.trailing, max(0, chrome.pageWidth - chrome.originX - chrome.gridWidth))
                     } else {
+                        // One layer for the whole page. The wallpaper is an AppKit image, so it does not zoom.
                         pageStrip(pages: pages, layout: chrome)
                             .frame(width: chrome.pageWidth, height: chrome.gridHeight)
+                            .scaleEffect(iconPageScale, anchor: .center)
+                            .opacity(iconPageOpacity)
+                            .compositingGroup()
                             .position(
                                 x: overlay.size.width / 2,
                                 y: chrome.originY + chrome.gridHeight / 2
@@ -172,7 +181,8 @@ struct OverlayRootView: View {
                 }
             }
             .onAppear {
-                visualPage = CGFloat(model.currentPage)
+                self.visualPage = CGFloat(self.model.currentPage)
+                self.applyIconPhase(self.model.fadePhase, from: self.appliedIconPhase)
             }
             .onChange(of: iconDragActive) { _, active in
                 model.setPointerDragActive(active)
@@ -199,12 +209,19 @@ struct OverlayRootView: View {
                 }
             }
             .onChange(of: model.isOverlayVisible) { _, visible in
-                if !visible {
-                    if pendingClosedDrop != nil {
-                        finishClosedFolderDrop()
+                if visible {
+                    self.releaseDismissedChromeIfNeeded()
+                } else {
+                    self.overlayDismissalPending = true
+                    if self.model.fadePhase == .closed {
+                        self.releaseDismissedChromeIfNeeded()
                     }
-                    returningHome = false
-                    releaseDragChrome()
+                }
+            }
+            .onChange(of: model.fadePhase) { old, phase in
+                self.applyIconPhase(phase, from: old)
+                if phase == .closed {
+                    self.releaseDismissedChromeIfNeeded()
                 }
             }
             .onChange(of: model.folderCloseRequest) { _, _ in
@@ -352,6 +369,83 @@ struct OverlayRootView: View {
                 settleReleasedIcon(session, layout: layout)
                 clearArmedDrag()
             }
+    }
+
+    /// Search and an open folder stay until the fade-out ends, so this waits with them.
+    /// A reopen runs it before the next open is shown.
+    private func releaseDismissedChromeIfNeeded() {
+        guard overlayDismissalPending else { return }
+        overlayDismissalPending = false
+        if pendingClosedDrop != nil {
+            finishClosedFolderDrop()
+        }
+        returningHome = false
+        releaseDragChrome()
+    }
+
+    /// Zoom and fade the icon page as one layer. Reduce Motion leaves it still; the window alpha is the cross-fade.
+    private func applyIconPhase(_ phase: GridFade.Phase, from old: GridFade.Phase) {
+        guard phase != appliedIconPhase else { return }
+        appliedIconPhase = phase
+        if reduceMotion {
+            iconMotion += 1
+            var snap = Transaction()
+            snap.disablesAnimations = true
+            withTransaction(snap) {
+                iconPageScale = 1
+                iconPageOpacity = 1
+            }
+            return
+        }
+        switch phase {
+        case .opening:
+            let fresh = old == .closed
+            let delay = GridFade.delay(fresh: fresh, reduceMotion: false)
+            let duration = GridFade.iconDuration(opening: true, fresh: fresh, reduceMotion: false)
+            iconMotion += 1
+            let motion = iconMotion
+            if fresh {
+                var snap = Transaction()
+                snap.disablesAnimations = true
+                withTransaction(snap) {
+                    iconPageScale = CGFloat(GridFade.iconScale)
+                    iconPageOpacity = 0
+                }
+            }
+            if delay > 0 {
+                // The lead-in is the icon delay. This does not read the event queue.
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    self.revealIconPage(motion: motion, duration: duration)
+                }
+            } else {
+                revealIconPage(motion: motion, duration: duration)
+            }
+        case .closing:
+            iconMotion += 1
+            let duration = GridFade.iconDuration(opening: false, fresh: false, reduceMotion: false)
+            withAnimation(.easeIn(duration: duration)) {
+                iconPageScale = CGFloat(GridFade.iconScale)
+                iconPageOpacity = 0
+            }
+        case .open:
+            iconMotion += 1
+            var snap = Transaction()
+            snap.disablesAnimations = true
+            withTransaction(snap) {
+                iconPageScale = 1
+                iconPageOpacity = 1
+            }
+        case .closed:
+            iconMotion += 1
+        }
+    }
+
+    private func revealIconPage(motion: Int, duration: Double) {
+        guard motion == iconMotion else { return }
+        withAnimation(.easeOut(duration: duration)) {
+            iconPageScale = 1
+            iconPageOpacity = 1
+        }
     }
 
     /// Hover-insert must not keep blocking clicks after the pointer is up.
