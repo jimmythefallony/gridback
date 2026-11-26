@@ -89,7 +89,8 @@ enum PrivacySettingsLink {
 
 /// Keeps the Settings line in step with the current wallpaper.
 /// A quiet read runs only for Allowed and Not allowed, off the main thread, and never for a folder
-/// that has not been decided. That read can raise the system prompt.
+/// that has not been asked. That is what keeps the system prompt from appearing on its own.
+/// The same read runs when the grid opens and when the app becomes active, with Settings closed.
 final class FolderSettingsController {
     private weak var model: GridBackModel?
     private weak var overlay: OverlayController?
@@ -99,8 +100,11 @@ final class FolderSettingsController {
     private var volumeKind = FolderVolumeKind.none
     private var denial = FolderDenialCache()
     private var probeWork: DispatchWorkItem?
+    private var retryWork: DispatchWorkItem?
     private var probeInFlight = false
     private var probeAgain = false
+    private var probeAgainIsRetry = false
+    private var retriesUsed = 0
     private var refreshTicket = 0
     private var watcher: DirectoryWatcher?
     private var desktopObserver: NSObjectProtocol?
@@ -111,6 +115,7 @@ final class FolderSettingsController {
 
     deinit {
         probeWork?.cancel()
+        retryWork?.cancel()
         watcher?.stop()
         if let desktopObserver {
             DistributedNotificationCenter.default().removeObserver(desktopObserver)
@@ -147,9 +152,7 @@ final class FolderSettingsController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.settingsOpen() else { return }
-            self.refreshLine()
-            self.scheduleProbe()
+            self?.appBecameActive()
         }
         let store = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store", isDirectory: true)
@@ -164,6 +167,31 @@ final class FolderSettingsController {
     func settingsBecameKey() {
         refreshLine()
         scheduleProbe()
+    }
+
+    /// The grid is opening. The plain fill is already up. This only re-checks a folder
+    /// that was already allowed or refused, then lets the open grid fade if that answer changed.
+    func gridDidOpen() {
+        beginCycle()
+        refreshLine()
+        scheduleProbe()
+    }
+
+    private func appBecameActive() {
+        // Opening the grid activates the app. That activation is not a new cycle,
+        // so it must not cancel the one retry the open already scheduled.
+        if model?.isOverlayVisible != true {
+            beginCycle()
+        }
+        refreshLine()
+        scheduleProbe()
+    }
+
+    /// A new open or activation gets its own single retry. A retry that is still waiting is dropped.
+    private func beginCycle() {
+        retryWork?.cancel()
+        retryWork = nil
+        retriesUsed = 0
     }
 
     func offerCurrent() {
@@ -199,9 +227,12 @@ final class FolderSettingsController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.probeDelay, execute: work)
     }
 
-    private func beginProbe() {
+    private func beginProbe(retry: Bool = false) {
         guard !probeInFlight else {
             probeAgain = true
+            if retry {
+                probeAgainIsRetry = true
+            }
             return
         }
         probeInFlight = true
@@ -219,39 +250,78 @@ final class FolderSettingsController {
                 }
                 guard let picture = self.picture,
                       let status = self.model?.folderAccessStatus,
-                      FolderAccessStatus.mayProbeSilently(status) else {
+                      FolderAccessRecheck.eligible(status, settingsOpen: self.settingsOpen()) else {
                     self.endProbe()
                     return
                 }
                 let path = picture.path
                 let place = picture.place
                 FolderAccessRead.start(path: path, place: place) { [weak self] granted in
-                    self?.completeProbe(granted: granted, path: path, place: place)
+                    self?.completeProbe(granted: granted, path: path, place: place, retry: retry)
                 }
             }
         }
     }
 
-    private func completeProbe(granted: Bool, path: String, place: WallpaperPathPlace) {
+    private func completeProbe(granted: Bool, path: String, place: WallpaperPathPlace, retry: Bool) {
         defer { endProbe() }
         guard picture?.path == path, picture?.place == place, let model else { return }
-        denial = model.applyFolderRecheck(
-            succeeded: granted,
-            place: place,
-            path: path,
-            denial: denial
-        )
+        let before = model.folderAccessStatus
         let decision: FolderAccessDecision = granted ? .tryRead : .fallback
-        log.info("\(FolderAccessLog.line(place: place, decision: decision), privacy: .public)")
-        if granted, model.isOverlayVisible != true {
+        let line = FolderAccessLog.line(place: place, decision: decision)
+        self.log.info("\(line, privacy: .public)")
+        // A failed read of an allowed place is not stored yet. The one later read
+        // can still succeed, and storing the failure would drop the grant.
+        let holdFailure = !granted && !retry && FolderAccessRecheck.shouldRetry(
+            status: before,
+            readSucceeded: false,
+            retriesUsed: retriesUsed
+        )
+        if !holdFailure {
+            denial = model.applyFolderRecheck(
+                succeeded: granted,
+                place: place,
+                path: path,
+                denial: denial
+            )
+        }
+        let status = model.folderAccessStatus
+        if model.isOverlayVisible, retry || status != before {
+            overlay?.refreshPictureAfterAccessChange()
+        } else if granted, !model.isOverlayVisible {
             overlay?.preparePictureForNextOpen()
         }
+        // The later read is not itself retried.
+        guard !retry, FolderAccessRecheck.shouldRetry(
+            status: before,
+            readSucceeded: granted,
+            retriesUsed: retriesUsed
+        ) else {
+            return
+        }
+        retriesUsed += 1
+        scheduleRetry()
+    }
+
+    /// One more read, about a second later. macOS can hand the grant over after the first one.
+    private func scheduleRetry() {
+        retryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.beginProbe(retry: true)
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + FolderAccessRecheck.retryDelay, execute: work)
     }
 
     private func endProbe() {
         probeInFlight = false
-        if probeAgain {
-            probeAgain = false
+        guard probeAgain else { return }
+        let retry = probeAgainIsRetry
+        probeAgain = false
+        probeAgainIsRetry = false
+        if retry {
+            beginProbe(retry: true)
+        } else {
             scheduleProbe()
         }
     }
