@@ -257,10 +257,10 @@ final class FolderSettingsController {
     }
 
     private func logSettingsProbe(granted: Bool, pathHash: UInt32, prewarm: Int) {
-        let result = DiagnosticProbeResult(granted: granted)
+        let resultName = DiagnosticProbeResult(granted: granted).logName
         let hash = Int(pathHash)
         let ms = DiagnosticClock.milliseconds
-        diagnosticLog.info("settings probe ms=\(ms, privacy: .public) result=\(result, privacy: .public) pathHash=\(hash, privacy: .public) prewarm=\(prewarm, privacy: .public)")
+        diagnosticLog.info("settings probe ms=\(ms, privacy: .public) result=\(resultName, privacy: .public) pathHash=\(hash, privacy: .public) prewarm=\(prewarm, privacy: .public)")
     }
 
     private func endProbe() {

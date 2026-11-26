@@ -364,17 +364,18 @@ final class OverlayController: NSObject {
     }
 
     private func logGridOpen(_ job: DesktopPictureJob, openedAs: Int) {
-        let place = DiagnosticPlace(job.folderPlace)
+        let placeName = DiagnosticPlace(job.folderPlace).logName
         let asked = membership(job.folderPlace, in: model?.folderAsked)
         let granted = membership(job.folderPlace, in: model?.folderGranted)
         let refused = membership(job.folderPlace, in: model?.folderDenied)
-        let decision = DiagnosticDecision(job.policyDecision)
-        let cache: DiagnosticCache = DesktopPicture.cached(job.cacheKey) == nil ? .miss : .hit
+        let decisionName = DiagnosticDecision(job.policyDecision).logName
+        let kindName = job.identityKind.logName
+        let cacheName = (DesktopPicture.cached(job.cacheKey) == nil ? DiagnosticCache.miss : DiagnosticCache.hit).logName
         let inflight = inflightPictureKey == job.cacheKey ? 1 : 0
         let inflightIdentity = inflightPictureKey.map { Int(DiagnosticPathHash.number(for: $0)) } ?? -1
         let identity = Int(DiagnosticPathHash.number(for: job.cacheKey))
         let ms = DiagnosticClock.milliseconds
-        log.info("grid open ms=\(ms, privacy: .public) n=\(openedAs, privacy: .public) place=\(place, privacy: .public) asked=\(asked, privacy: .public) granted=\(granted, privacy: .public) refused=\(refused, privacy: .public) decision=\(decision, privacy: .public) exists=\(job.lookedExists, privacy: .public) readable=\(job.lookedReadable, privacy: .public) images=\(job.metadataCount, privacy: .public) kind=\(job.identityKind, privacy: .public) identity=\(identity, privacy: .public) cache=\(cache, privacy: .public) inflight=\(inflight, privacy: .public) inflightIdentity=\(inflightIdentity, privacy: .public)")
+        log.info("grid open ms=\(ms, privacy: .public) n=\(openedAs, privacy: .public) place=\(placeName, privacy: .public) asked=\(asked, privacy: .public) granted=\(granted, privacy: .public) refused=\(refused, privacy: .public) decision=\(decisionName, privacy: .public) exists=\(job.lookedExists, privacy: .public) readable=\(job.lookedReadable, privacy: .public) images=\(job.metadataCount, privacy: .public) kind=\(kindName, privacy: .public) identity=\(identity, privacy: .public) cache=\(cacheName, privacy: .public) inflight=\(inflight, privacy: .public) inflightIdentity=\(inflightIdentity, privacy: .public)")
     }
 
     /// The 16-byte read Settings uses, only after the place is already Allowed.
@@ -473,9 +474,9 @@ final class OverlayController: NSObject {
                 self.inflightPictureKey = nil
             }
             let (renderedOnMain, qos, milliseconds, cgImage, readErrno, sourceNil, sourceStatus, sourceStatusKnown) = result
-            let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
+            let resultName = (cgImage == nil ? DiagnosticRenderResult.empty : DiagnosticRenderResult.success).logName
             let errnoInfo = cgImage == nil ? Int(readErrno) : 0
-            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(errnoInfo, privacy: .public) sourceNil=\(sourceNil, privacy: .public) sourceStatusKnown=\(sourceStatusKnown, privacy: .public) sourceStatus=\(sourceStatus, privacy: .public)")
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(resultName, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(errnoInfo, privacy: .public) sourceNil=\(sourceNil, privacy: .public) sourceStatusKnown=\(sourceStatusKnown, privacy: .public) sourceStatus=\(sourceStatus, privacy: .public)")
             self.log.info("DesktopPicture render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             let image = cgImage.map { NSImage(cgImage: $0, size: job.pointSize) }
             if let image, WallpaperPictureStore.shouldKeep(
@@ -531,8 +532,8 @@ final class OverlayController: NSObject {
                 self.aerialInFlightKey = nil
             }
             let (renderedOnMain, qos, milliseconds, cgImage) = result
-            let outcome: DiagnosticRenderResult = cgImage == nil ? .empty : .success
-            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(outcome, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(0, privacy: .public) sourceNil=\(0, privacy: .public) sourceStatusKnown=\(0, privacy: .public) sourceStatus=\(0, privacy: .public)")
+            let resultName = (cgImage == nil ? DiagnosticRenderResult.empty : DiagnosticRenderResult.success).logName
+            self.log.info("render finish ms=\(DiagnosticClock.milliseconds, privacy: .public) n=\(openedAs, privacy: .public) identity=\(identity, privacy: .public) result=\(resultName, privacy: .public) duration=\(milliseconds, privacy: .public) errnoInfo=\(0, privacy: .public) sourceNil=\(0, privacy: .public) sourceStatusKnown=\(0, privacy: .public) sourceStatus=\(0, privacy: .public)")
             self.log.info("DesktopPicture aerial render main=\(renderedOnMain, privacy: .public) qos=\(qos, privacy: .public) ms=\(milliseconds, privacy: .public) applyMain=\(Thread.isMainThread, privacy: .public)")
             guard let cgImage else {
                 self.aerialFailedKey = key
@@ -576,9 +577,10 @@ final class OverlayController: NSObject {
             currentCacheKey: pictureKey ?? "",
             stillWanted: wantsGrid
         )
+        let outcomeName = DiagnosticOutcome(outcome).logName
         let scheduledIdentity = Int(DiagnosticPathHash.number(for: cacheKey))
         let currentIdentity = Int(DiagnosticPathHash.number(for: pictureKey ?? ""))
-        log.info("present ms=\(DiagnosticClock.milliseconds, privacy: .public) outcome=\(DiagnosticOutcome(outcome), privacy: .public) scheduledOpen=\(openedAs, privacy: .public) currentOpen=\(openCount, privacy: .public) scheduledIdentity=\(scheduledIdentity, privacy: .public) currentIdentity=\(currentIdentity, privacy: .public)")
+        log.info("present ms=\(DiagnosticClock.milliseconds, privacy: .public) outcome=\(outcomeName, privacy: .public) scheduledOpen=\(openedAs, privacy: .public) currentOpen=\(openCount, privacy: .public) scheduledIdentity=\(scheduledIdentity, privacy: .public) currentIdentity=\(currentIdentity, privacy: .public)")
         switch outcome {
         case .ignore:
             log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
@@ -2069,35 +2071,5 @@ enum DiagnosticProbeResult {
         case .granted: return "granted"
         case .denied: return "denied"
         }
-    }
-}
-
-extension OSLogInterpolation {
-    mutating func appendInterpolation(_ value: DiagnosticPlace, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticDecision, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticIdentity, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticCache, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticRenderResult, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticOutcome, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
-    }
-
-    mutating func appendInterpolation(_ value: DiagnosticProbeResult, privacy: OSLogPrivacy = .auto) {
-        appendInterpolation(value.logName, privacy: privacy)
     }
 }
