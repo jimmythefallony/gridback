@@ -320,37 +320,56 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
-                if absorbingIntoFolder { return }
-                if model.heldDrag.suppressCommit {
-                    abandonDragVisuals()
+                let phase = self.model.heldDrag.phase
+                let insideContent = self.pointerIsInsideFolderContent(self.finger)
+                if self.absorbingIntoFolder {
+                    self.logIssue64DragEnd(route: "return:absorbing", phase: phase, outcome: "notResolved", insideContent: insideContent)
                     return
                 }
-                switch model.resolveHoverRelease(insideContent: pointerIsInsideFolderContent(finger)) {
+                if self.model.heldDrag.suppressCommit {
+                    self.logIssue64DragEnd(route: "abandon:suppressCommit", phase: phase, outcome: "notResolved", insideContent: insideContent)
+                    self.abandonDragVisuals()
+                    return
+                }
+                switch self.model.resolveHoverRelease(insideContent: insideContent) {
                 case .none:
-                    abandonDragVisuals()
+                    self.logIssue64DragEnd(route: "abandon:outcomeNone", phase: phase, outcome: "none", insideContent: insideContent)
+                    self.abandonDragVisuals()
                     return
                 case .insert(let appID, let folderID, let index):
-                    model.commitFolderInsert(appID: appID, folderID: folderID, index: index)
-                    abandonDragVisuals()
+                    self.logIssue64DragEnd(
+                        route: "commitFolderInsert",
+                        phase: phase,
+                        outcome: Issue64Log.outcome(.insert(appID: appID, folderID: folderID, index: index)),
+                        insideContent: insideContent
+                    )
+                    self.model.commitFolderInsert(appID: appID, folderID: folderID, index: index)
+                    self.abandonDragVisuals()
                     return
                 case .reorder:
                     break
                 }
-                if folderDragID != nil && !folderHandoff {
-                    clearFolderDrag()
+                if self.folderDragID != nil && !self.folderHandoff {
+                    self.logIssue64DragEnd(route: "clearFolderDrag", phase: phase, outcome: "reorder", insideContent: insideContent)
+                    self.clearFolderDrag()
                     return
                 }
-                if folderHandoff {
-                    if pointerHandoff.isTracking { return }
-                    finishHandoff()
+                if self.folderHandoff {
+                    if self.pointerHandoff.isTracking {
+                        self.logIssue64DragEnd(route: "defer:pointerTracking", phase: phase, outcome: "reorder", insideContent: insideContent)
+                        return
+                    }
+                    self.logIssue64DragEnd(route: "finishHandoff", phase: phase, outcome: "reorder", insideContent: insideContent)
+                    self.finishHandoff()
                     return
                 }
-                armClock.stop()
-                if let reorder {
-                    if let armedTarget,
-                       model.layout.folder(armedTarget) != nil,
-                       model.openFolderID != armedTarget {
-                        absorbIntoClosedFolder(
+                self.armClock.stop()
+                if let reorder = self.reorder {
+                    if let armedTarget = self.armedTarget,
+                       self.model.layout.folder(armedTarget) != nil,
+                       self.model.openFolderID != armedTarget {
+                        self.logIssue64DragEnd(route: "absorbIntoClosedFolder", phase: phase, outcome: "reorder", insideContent: insideContent)
+                        self.absorbIntoClosedFolder(
                             appID: reorder.appID,
                             folderID: armedTarget,
                             layout: layout,
@@ -358,17 +377,40 @@ struct OverlayRootView: View {
                         )
                         return
                     }
-                    if let armedTarget {
-                        model.group(draggedAppID: reorder.appID, targetID: armedTarget)
+                    if let armedTarget = self.armedTarget {
+                        self.logIssue64DragEnd(route: "group", phase: phase, outcome: "reorder", insideContent: insideContent)
+                        self.model.group(draggedAppID: reorder.appID, targetID: armedTarget)
                     } else {
-                        model.commitReorder(reorder.preview, page: reorder.page)
+                        self.logIssue64DragEnd(route: "commitReorder", phase: phase, outcome: "reorder", insideContent: insideContent)
+                        self.model.commitReorder(reorder.preview, page: reorder.page)
                     }
+                } else {
+                    self.logIssue64DragEnd(route: "release:noReorderSession", phase: phase, outcome: "reorder", insideContent: insideContent)
                 }
-                let session = reorder
-                releaseDragChrome()
-                settleReleasedIcon(session, layout: layout)
-                clearArmedDrag()
+                let session = self.reorder
+                self.releaseDragChrome()
+                self.settleReleasedIcon(session, layout: layout)
+                self.clearArmedDrag()
             }
+    }
+
+    /// Temporary issue #64 trace. Reads the drag as it stands, then the gesture follows the same branch.
+    private func logIssue64DragEnd(route: String, phase: HeldDrag.Phase, outcome: String, insideContent: Bool) {
+        let panelReady = folderPanel != .zero
+        let pointerInPanel = panelReady
+            && finger.x >= folderPanel.minX && finger.x <= folderPanel.maxX
+            && finger.y >= folderPanel.minY && finger.y <= folderPanel.maxY
+        let leftPanel = panelReady && FolderPanelExit.hasLeft(
+            x: Double(finger.x),
+            y: Double(finger.y),
+            minX: Double(folderPanel.minX),
+            minY: Double(folderPanel.minY),
+            maxX: Double(folderPanel.maxX),
+            maxY: Double(folderPanel.maxY)
+        )
+        Issue64Log.line(
+            "onEnded phase=\(Issue64Log.phase(phase)) outcome=\(outcome) insideContent=\(insideContent) pointerInPanel=\(pointerInPanel) leftPanel=\(leftPanel) panelReady=\(panelReady) folderHandoff=\(folderHandoff) extracted=\(folderHandoff) armed=\(Issue64Log.token(armedTarget)) open=\(Issue64Log.token(model.openFolderID)) inserting=\(Issue64Log.token(insertingIntoFolder)) folderDrag=\(Issue64Log.token(folderDragID)) reorderApp=\(Issue64Log.token(reorder?.appID)) tracking=\(pointerHandoff.isTracking) suppress=\(model.heldDrag.suppressCommit) absorbing=\(absorbingIntoFolder) folders=\(Issue64Log.folderOrders(model.layout)) route=\(route)"
+        )
     }
 
     /// Search and an open folder stay until the fade-out ends, so this waits with them.
@@ -748,19 +790,21 @@ struct OverlayRootView: View {
             dragSettled = false
             blockLaunch = true
             pointerHandoff.onMove = { [self] point in
-                finger = point
-                dragLayout = layout
-                if folderHandoff {
-                    updateReorder(at: point, layout: layout)
+                self.finger = point
+                self.dragLayout = layout
+                if self.folderHandoff {
+                    self.updateReorder(at: point, layout: layout)
                 } else {
-                    beginFolderHandoffIfNeeded(at: point, layout: layout)
+                    self.beginFolderHandoffIfNeeded(at: point, layout: layout)
                 }
             }
             pointerHandoff.onUp = { [self] _ in
-                if folderHandoff {
-                    finishHandoff()
+                let handoff = self.folderHandoff
+                Issue64Log.line("pointerUp phase=\(Issue64Log.phase(self.model.heldDrag.phase)) folderHandoff=\(handoff) dragSettled=\(self.dragSettled) route=\(handoff ? "finishHandoff" : "clearFolderDrag")")
+                if handoff {
+                    self.finishHandoff()
                 } else {
-                    clearFolderDrag()
+                    self.clearFolderDrag()
                 }
             }
             pointerHandoff.start()
@@ -785,6 +829,7 @@ struct OverlayRootView: View {
         let count = model.layout.pages.indices.contains(page) ? model.layout.pages[page].count : 0
         let slot = layout.insertionSlot(x: Double(point.x), y: Double(point.y), itemCount: count) ?? count
         let extracted = FolderEditing.moveAppOut(layout: model.layout, appID: id, toPage: page, toSlot: slot)
+        Issue64Log.line("extract app=\(Issue64Log.token(id)) folder=\(Issue64Log.token(model.openFolderID)) page=\(page) slot=\(slot) modelFolders=\(Issue64Log.folderOrders(model.layout)) previewFolders=\(Issue64Log.folderOrders(extracted))")
         folderHandoff = true
         model.noteHeldExtracted()
         reorder = GridReorderSession(appID: id, layout: extracted, page: page)
@@ -861,6 +906,7 @@ struct OverlayRootView: View {
 
     private func finishClosedFolderDrop() {
         guard let pending = pendingClosedDrop else { return }
+        Issue64Log.line("finishClosedFolderDrop app=\(Issue64Log.token(pending.appID)) folder=\(Issue64Log.token(pending.folderID))")
         pendingClosedDrop = nil
         closedDropToken += 1
         model.group(draggedAppID: pending.appID, targetID: pending.folderID)
@@ -927,12 +973,18 @@ struct OverlayRootView: View {
     }
 
     private func finishHandoff() {
-        guard folderHandoff, !dragSettled else { return }
+        guard folderHandoff, !dragSettled else {
+            Issue64Log.line("finishHandoff skip folderHandoff=\(folderHandoff) dragSettled=\(dragSettled) phase=\(Issue64Log.phase(model.heldDrag.phase))")
+            return
+        }
         if model.heldDrag.suppressCommit {
+            Issue64Log.line("finishHandoff abandon reason=suppressCommit phase=\(Issue64Log.phase(model.heldDrag.phase))")
             abandonDragVisuals()
             return
         }
-        _ = model.completeHeldDrag()
+        let phase = model.heldDrag.phase
+        let outcome = model.completeHeldDrag()
+        Issue64Log.line("finishHandoff phase=\(Issue64Log.phase(phase)) complete=\(Issue64Log.outcome(outcome)) commitReorder=\(reorder != nil)")
         dragSettled = true
         pointerHandoff.stop()
         if let reorder {
@@ -1431,5 +1483,68 @@ private final class ScrollCatcherView: NSView {
         if let monitor {
             NSEvent.removeMonitor(monitor)
         }
+    }
+}
+
+/// Temporary console trace for issue #64. Remove this with the diagnostic branch.
+enum Issue64Log {
+    static func line(_ message: String) {
+        print("[#64] \(message)")
+    }
+
+    static func token(_ id: String?) -> String {
+        guard let id, !id.isEmpty else { return "nil" }
+        if id.hasPrefix("folder.") {
+            return "f.\(id.dropFirst("folder.".count).prefix(8))"
+        }
+        if id.contains("/") || id.contains("\\") || id.hasPrefix("~") {
+            return "unbundled.\(Self.digest(id))"
+        }
+        return id
+    }
+
+    static func phase(_ phase: HeldDrag.Phase) -> String {
+        switch phase {
+        case .idle:
+            return "idle"
+        case .grid(let appID):
+            return "grid(\(token(appID)))"
+        case .insideFolder(let appID, let folderID):
+            return "insideFolder(\(token(appID)),\(token(folderID)))"
+        case .extracted(let appID, let folderID):
+            return "extracted(\(token(appID)),\(token(folderID)))"
+        case .inserting(let appID, let folderID, let index):
+            return "inserting(\(token(appID)),\(token(folderID)),\(index))"
+        }
+    }
+
+    static func outcome(_ outcome: HeldDrag.Outcome) -> String {
+        switch outcome {
+        case .none:
+            return "none"
+        case .reorder:
+            return "reorder"
+        case .insert(let appID, let folderID, let index):
+            return "insert(\(token(appID)),\(token(folderID)),\(index))"
+        }
+    }
+
+    static func folderOrders(_ layout: Layout) -> String {
+        guard !layout.folders.isEmpty else { return "none" }
+        return layout.folders.map { folder in
+            let apps = folder.appIDs.map { Self.token($0) }.joined(separator: ",")
+            return "\(Self.token(folder.id)):[\(apps)]"
+        }.joined(separator: " ")
+    }
+
+    /// Stable tag for a path-backed id. The path itself is not printed.
+    private static func digest(_ text: String) -> String {
+        var hash: UInt32 = 2166136261
+        for byte in text.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16777619
+        }
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: max(0, 8 - hex.count)) + hex
     }
 }

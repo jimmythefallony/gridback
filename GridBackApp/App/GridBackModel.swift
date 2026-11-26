@@ -561,6 +561,7 @@ final class GridBackModel: ObservableObject {
     func group(draggedAppID: String, targetID: String) {
         let previous = layout
         let updated = FolderEditing.group(layout: previous, draggedAppID: draggedAppID, targetID: targetID)
+        Issue64Log.line("group dragged=\(Issue64Log.token(draggedAppID)) target=\(Issue64Log.token(targetID)) changed=\(updated != previous) before=\(Issue64Log.folderOrders(previous)) after=\(Issue64Log.folderOrders(updated))")
         guard updated != previous else { return }
         layout = updated
         if let created = FolderEditing.createdFolderID(before: previous, after: updated) {
@@ -576,6 +577,7 @@ final class GridBackModel: ObservableObject {
 
     func commitFolderInsert(appID: String, folderID: String, index: Int) {
         let updated = FolderEditing.insertApp(layout: layout, appID: appID, folderID: folderID, at: index)
+        Issue64Log.line("commitFolderInsert app=\(Issue64Log.token(appID)) folder=\(Issue64Log.token(folderID)) index=\(index) changed=\(updated != layout) before=\(Issue64Log.folderOrders(layout)) after=\(Issue64Log.folderOrders(updated))")
         guard updated != layout else { return }
         layout = updated
         openFolderID = folderID
@@ -586,6 +588,7 @@ final class GridBackModel: ObservableObject {
         let page = layout.pages.indices.contains(currentPage) ? currentPage : 0
         let slot = layout.pages.indices.contains(page) ? layout.pages[page].count : 0
         let updated = FolderEditing.moveAppOut(layout: layout, appID: appID, toPage: page, toSlot: slot)
+        Issue64Log.line("returnAppToGrid app=\(Issue64Log.token(appID)) changed=\(updated != layout) before=\(Issue64Log.folderOrders(layout)) after=\(Issue64Log.folderOrders(updated))")
         guard updated != layout else { return }
         layout = updated
         if let openFolderID, updated.folder(openFolderID) == nil {
@@ -602,6 +605,9 @@ final class GridBackModel: ObservableObject {
     }
 
     func commitReorder(_ layout: Layout, page: Int) {
+        let before = Issue64Log.folderOrders(self.layout)
+        let after = Issue64Log.folderOrders(layout)
+        Issue64Log.line("commitReorder page=\(page) searching=\(isSearching) changed=\(!isSearching && layout != self.layout) before=\(before) after=\(after)")
         guard !isSearching else { return }
         if layout != self.layout {
             self.layout = layout
