@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     func gridBackShowOverlay() {
         folderAccess.gridOpened()
         overlay.show()
+        folderSettings.gridDidOpen()
     }
 
     func gridBackHideOverlay() {

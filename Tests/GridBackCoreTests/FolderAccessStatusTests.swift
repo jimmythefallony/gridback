@@ -94,6 +94,124 @@ final class FolderAccessStatusTests: XCTestCase {
         }
     }
 
+    func testRecheckNeverRunsForAPlaceThatHasNotBeenAsked() {
+        let notAsked = FolderAccessRecheck.status(
+            place: .downloads,
+            volumeKind: .none,
+            asked: [],
+            granted: [],
+            denied: []
+        )
+        XCTAssertEqual(notAsked, .notAsked)
+        XCTAssertFalse(FolderAccessRecheck.eligible(notAsked, settingsOpen: false))
+        XCTAssertFalse(FolderAccessRecheck.eligible(notAsked, settingsOpen: true))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: notAsked, readSucceeded: true, retriesUsed: 0))
+
+        let notNow = FolderAccessRecheck.status(
+            place: .downloads,
+            volumeKind: .none,
+            asked: [.downloads],
+            granted: [],
+            denied: []
+        )
+        XCTAssertEqual(notNow, .notNow)
+        XCTAssertFalse(FolderAccessRecheck.eligible(notNow, settingsOpen: false))
+        XCTAssertFalse(FolderAccessRecheck.eligible(notNow, settingsOpen: true))
+
+        let refused = FolderAccessRecheck.status(
+            place: .downloads,
+            volumeKind: .none,
+            asked: [.downloads],
+            granted: [],
+            denied: [.downloads]
+        )
+        XCTAssertEqual(refused, .notAllowed)
+        XCTAssertTrue(FolderAccessRecheck.eligible(refused, settingsOpen: false))
+        XCTAssertTrue(FolderAccessRecheck.eligible(refused, settingsOpen: true))
+        XCTAssertTrue(FolderAccessRecheck.opensOnPlainFill(refused))
+
+        let allowed = FolderAccessRecheck.status(
+            place: .downloads,
+            volumeKind: .none,
+            asked: [.downloads],
+            granted: [.downloads],
+            denied: []
+        )
+        XCTAssertEqual(allowed, .allowed)
+        XCTAssertTrue(FolderAccessRecheck.eligible(allowed, settingsOpen: false))
+        XCTAssertFalse(FolderAccessRecheck.opensOnPlainFill(allowed))
+
+        let pictures = FolderAccessRecheck.status(
+            place: .pictures,
+            volumeKind: .none,
+            asked: [],
+            granted: [],
+            denied: []
+        )
+        XCTAssertEqual(pictures, .notNeeded)
+        XCTAssertFalse(FolderAccessRecheck.eligible(pictures, settingsOpen: false))
+        XCTAssertFalse(FolderAccessRecheck.opensOnPlainFill(pictures))
+
+        for status in FolderAccessStatus.allCases {
+            XCTAssertEqual(
+                FolderAccessRecheck.eligible(status, settingsOpen: false),
+                FolderAccessRecheck.eligible(status, settingsOpen: true),
+                status.rawValue
+            )
+            XCTAssertEqual(
+                FolderAccessRecheck.eligible(status, settingsOpen: false),
+                status == .allowed || status == .notAllowed,
+                status.rawValue
+            )
+        }
+    }
+
+    func testCacheIdentityIncludesTheAccessState() {
+        func key(_ access: FolderAccessStatus, token: String = "protected", kind: WallpaperKind = .fallback) -> String {
+            WallpaperCacheIdentity.key(
+                token: token,
+                pixelWidth: 80,
+                pixelHeight: 40,
+                appearance: .dark,
+                kind: kind,
+                imageIndex: nil,
+                storeModified: 10,
+                access: access
+            )
+        }
+
+        let refused = key(.notAllowed)
+        let allowedFill = key(.allowed)
+        let allowedPicture = key(.allowed, token: "picture", kind: .still)
+        XCTAssertNotEqual(refused, allowedFill)
+        XCTAssertNotEqual(refused, allowedPicture)
+        XCTAssertNotEqual(key(.notAsked), key(.notAllowed))
+        XCTAssertEqual(refused, key(.notAllowed))
+        XCTAssertTrue(refused.hasSuffix("|notAllowed"))
+        XCTAssertTrue(allowedPicture.hasSuffix("|allowed"))
+        XCTAssertFalse(refused.hasSuffix("|allowed"))
+
+        let pictures = key(.notNeeded, token: "picture", kind: .still)
+        XCTAssertEqual(pictures, key(.notNeeded, token: "picture", kind: .still))
+        XCTAssertNotEqual(pictures, allowedPicture)
+    }
+
+    func testAllowedPlaceIsRetriedOnce() {
+        XCTAssertEqual(FolderAccessRecheck.retryDelay, 1, accuracy: 0.001)
+        XCTAssertTrue(FolderAccessRecheck.shouldRetry(status: .allowed, readSucceeded: true, retriesUsed: 0))
+        XCTAssertTrue(FolderAccessRecheck.shouldRetry(status: .allowed, readSucceeded: false, retriesUsed: 0))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: .allowed, readSucceeded: true, retriesUsed: 1))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: .allowed, readSucceeded: false, retriesUsed: 1))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: .allowed, readSucceeded: false, retriesUsed: 2))
+        XCTAssertTrue(FolderAccessRecheck.shouldRetry(status: .notAllowed, readSucceeded: true, retriesUsed: 0))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: .notAllowed, readSucceeded: true, retriesUsed: 1))
+        XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: .notAllowed, readSucceeded: false, retriesUsed: 0))
+        for status in [FolderAccessStatus.notAsked, .notNow, .notNeeded, .unsupported] {
+            XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: status, readSucceeded: true, retriesUsed: 0), status.rawValue)
+            XCTAssertFalse(FolderAccessRecheck.shouldRetry(status: status, readSucceeded: false, retriesUsed: 0), status.rawValue)
+        }
+    }
+
     func testAskAgainTurnsNotNowIntoNotAskedAndLeavesNotAllowed() {
         let notNow = FolderAccessEdits.askAgain(
             place: .desktop,

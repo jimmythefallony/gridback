@@ -27,6 +27,10 @@ final class OverlayController: NSObject {
     private var pictureKey: String?
     /// Wallpaper identity prepared for the next open, including while the grid is closed.
     private var preparedKey: String?
+    /// Bumps when a new picture load starts or the grid closes, so a late load is dropped.
+    private var pictureLoad = 0
+    /// The plain fill is already on screen. Replacing it with the same fill does not fade.
+    private var showingPlainFill = false
     private var inflightPictureKey: String?
     /// Last decision written to the log, so one open records one line.
     private var loggedDecision = ""
@@ -94,6 +98,7 @@ final class OverlayController: NSObject {
         let occlusion = DockClearanceReader.current(on: screen).occlusion
         layoutFrames(panel: panel, backdrop: backdrop, on: screen, occlusion: occlusion)
         model.updateScreenReserve(.none)
+        revealPlainFillIfHeld()
         // The system launcher can open with us, or already be underneath.
         // Close it before we take the keyboard, and only once: the Dock
         // notification toggles, so a second send would open it again.
@@ -122,6 +127,8 @@ final class OverlayController: NSObject {
     func hide() {
         GridOpenTrace.shared.gridClosed()
         wantsGrid = false
+        showingPlainFill = false
+        pictureLoad += 1
         removeEscapeMonitor()
         // If the system launcher is still underneath, close it with us so a
         // background click does not dismiss into Launchpad.
@@ -299,12 +306,25 @@ final class OverlayController: NSObject {
         prewarmPicture()
     }
 
-    private func pictureJob(on screen: NSScreen) -> DesktopPictureJob {
-        DesktopPicture.job(
-            on: screen,
-            askedLocations: model?.folderAsked ?? [],
-            grantedLocations: model?.folderGranted ?? []
-        )
+    /// The folder answer changed, or an allowed place is being read again.
+    /// An open grid fades onto the new picture. The same crossfade is used when Light or Dark changes.
+    func refreshPictureAfterAccessChange() {
+        guard let screen = PrimaryDisplay.screen() else { return }
+        if wantsGrid {
+            ensurePicture(generation: showGeneration, on: screen)
+        } else {
+            prewarmPicture()
+        }
+    }
+
+    /// The plain fill goes up at once for a folder that is not allowed yet.
+    /// The check and the picture read stay off this turn, so the open does not wait.
+    private func revealPlainFillIfHeld() {
+        guard panel?.isVisible != true else { return }
+        guard let status = model?.folderAccessStatus, FolderAccessRecheck.opensOnPlainFill(status) else { return }
+        showSharedFill(WallpaperNeutralFill.color(for: .dark), job: nil)
+        showingPlainFill = true
+        revealGrid()
     }
 
     /// Prepares the blur before the grid opens. Opening the grid already re-reads
@@ -312,29 +332,53 @@ final class OverlayController: NSObject {
     /// An Aerial frame is grabbed here too, so a later open can use the cache.
     private func prewarmPicture() {
         guard !wantsGrid, let screen = PrimaryDisplay.screen() else { return }
-        let job = pictureJob(on: screen)
-        notePicture(job)
-        preparedKey = job.cacheKey
-        guard DesktopPicture.cached(job.cacheKey) == nil else { return }
-        if job.aerialAssetID != nil {
-            startAerialFrame(job, generation: showGeneration)
-            return
-        }
-        startPictureRender(job, generation: showGeneration)
+        beginPictureLoad(on: screen, generation: showGeneration)
     }
 
-    /// Shows the shared blurred picture. A cached picture is applied immediately.
-    /// A photo miss is rendered off the main thread, and the windows stay hidden until it arrives
-    /// so the sharp wallpaper never flashes.
+    /// Shows the shared blurred picture. A cached picture is applied when the load returns.
+    /// The file read that builds the picture runs off the main thread.
+    /// A photo miss keeps the windows hidden until the blur arrives, so the sharp wallpaper never flashes.
     /// An Aerial miss shows the plain fallback immediately. The frame is grabbed
     /// off the main thread and fades in when it is ready. `show()` does not wait.
     private func ensurePicture(generation: Int, on screen: NSScreen) {
-        let job = pictureJob(on: screen)
+        beginPictureLoad(on: screen, generation: generation)
+    }
+
+    /// Screen geometry is captured here, on the main thread. The file reads happen on the picture queue.
+    private func beginPictureLoad(on screen: NSScreen, generation: Int) {
+        pictureLoad += 1
+        let load = pictureLoad
+        let request = DesktopPicture.request(
+            on: screen,
+            askedLocations: model?.folderAsked ?? [],
+            grantedLocations: model?.folderGranted ?? [],
+            deniedLocations: model?.folderDenied ?? []
+        )
+        OffMainWork.start {
+            DesktopPicture.job(request)
+        } apply: { [weak self] job in
+            guard let self, self.pictureLoad == load else { return }
+            self.deliverPicture(job, generation: generation)
+        }
+    }
+
+    private func deliverPicture(_ job: DesktopPictureJob, generation: Int) {
         notePicture(job)
-        pictureKey = job.cacheKey
         preparedKey = job.cacheKey
-        if let image = DesktopPicture.cached(job.cacheKey) {
-            applyPicture(image, job: job)
+        let cached = DesktopPicture.cached(job.cacheKey)
+        if !wantsGrid {
+            guard cached == nil else { return }
+            if job.aerialAssetID != nil {
+                startAerialFrame(job, generation: generation)
+                return
+            }
+            startPictureRender(job, generation: generation)
+            return
+        }
+        guard generation == showGeneration else { return }
+        pictureKey = job.cacheKey
+        if let cached {
+            applyPicture(cached, job: job)
             revealGrid()
             return
         }
@@ -346,6 +390,7 @@ final class OverlayController: NSObject {
                 holding.kind = .fallback
                 holding.solidColor = WallpaperNeutralFill.color(for: job.appearance)
                 showSharedFill(holding.solidColor ?? WallpaperNeutralFill.color(for: holding.appearance), job: holding)
+                showingPlainFill = true
                 revealGrid()
             }
             startAerialFrame(job, generation: generation)
@@ -562,7 +607,11 @@ final class OverlayController: NSObject {
         )
         let ink = Ink.forBackdrop(source, previous: model.ink)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let animate = panel.isVisible && !reduceMotion
+        let replacingPlainFill = showingPlainFill && job.url == nil && job.aerialAssetID == nil
+        let animate = !replacingPlainFill && panel.isVisible && !reduceMotion
+        if job.url != nil || job.aerialAssetID != nil {
+            showingPlainFill = false
+        }
         if ink != model.ink {
             log.info("Ink \(String(describing: ink), privacy: .public) kind=\(job.kind.rawValue, privacy: .public)")
         }
@@ -778,6 +827,17 @@ enum AerialFrameGrabber {
     }
 }
 
+/// Captured on the main thread. Building the picture reads files, so that work does not run here.
+struct DesktopPictureRequest {
+    var appearance: WallpaperAppearance
+    var workspacePath: String?
+    var scale: CGFloat
+    var frame: NSRect
+    var askedLocations: Set<WallpaperPathPlace>
+    var grantedLocations: Set<WallpaperPathPlace>
+    var deniedLocations: Set<WallpaperPathPlace>
+}
+
 enum DesktopPicture {
     private static var cacheKey: String?
     private static var cache: NSImage?
@@ -794,18 +854,38 @@ enum DesktopPicture {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
     }
 
+    /// Screen geometry and the saved folder lists. Call this on the main thread.
+    static func request(
+        on screen: NSScreen,
+        askedLocations: Set<WallpaperPathPlace>,
+        grantedLocations: Set<WallpaperPathPlace>,
+        deniedLocations: Set<WallpaperPathPlace>
+    ) -> DesktopPictureRequest {
+        DesktopPictureRequest(
+            appearance: systemAppearance(),
+            workspacePath: NSWorkspace.shared.desktopImageURL(for: screen)?.path,
+            scale: screen.backingScaleFactor,
+            frame: screen.frame,
+            askedLocations: askedLocations,
+            grantedLocations: grantedLocations,
+            deniedLocations: deniedLocations
+        )
+    }
+
     /// The blur for the wallpaper on this screen. A time-of-day photo has no single
     /// frame, so the job asks for the plain blur. A downloaded Aerial uses one
     /// frame of the local movie. A missing movie stays the plain blur.
     /// A sandboxed build cannot read the wallpaper store, and then only a plain
     /// photo URL is used.
-    static func job(
-        on screen: NSScreen,
-        askedLocations: Set<WallpaperPathPlace> = [],
-        grantedLocations: Set<WallpaperPathPlace> = []
-    ) -> DesktopPictureJob {
-        let appearance = systemAppearance()
-        let workspacePath = NSWorkspace.shared.desktopImageURL(for: screen)?.path
+    /// Call this off the main thread. It reads the wallpaper file.
+    static func job(_ request: DesktopPictureRequest) -> DesktopPictureJob {
+        let appearance = request.appearance
+        let workspacePath = request.workspacePath
+        let askedLocations = request.askedLocations
+        let grantedLocations = request.grantedLocations
+        let deniedLocations = request.deniedLocations
+        let frame = request.frame
+        let scale = max(request.scale, 1)
         let stored = WallpaperStoreReader.load()
         var choice = stored.choice
         if choice?.solidColor == nil,
@@ -867,8 +947,10 @@ enum DesktopPicture {
         var askPath: String?
         var askPlace: WallpaperPathPlace?
         var askVolumeKind = FolderVolumeKind.none
+        var accessVolume = FolderVolumeKind.none
         if let protected {
             let volumeKind = FolderVolumeKindProbe.kind(path: protected.path)
+            accessVolume = volumeKind
             let accessDecision = FolderAccessPolicy.decide(
                 place: protected.place,
                 askedLocations: askedLocations,
@@ -967,9 +1049,8 @@ enum DesktopPicture {
         } else {
             matchLog = ""
         }
-        let scale = max(screen.backingScaleFactor, 1)
-        let pixelW = max(1, Int((screen.frame.width * scale).rounded()))
-        let pixelH = max(1, Int((screen.frame.height * scale).rounded()))
+        let pixelW = max(1, Int((frame.width * scale).rounded()))
+        let pixelH = max(1, Int((frame.height * scale).rounded()))
         var kind = WallpaperKind.fallback
         var url: URL?
         var imageIndex = 0
@@ -989,7 +1070,7 @@ enum DesktopPicture {
                     break
                 }
             }
-            let read = WallpaperFileMetadata.read(at: URL(fileURLWithPath: path))
+            let read = WallpaperFileMetadata.readOffMainThread(at: URL(fileURLWithPath: path))
             kind = WallpaperClassifier.kind(hints: read.hints, imageCount: read.imageCount)
             switch WallpaperClassifier.frame(kind: kind, hints: read.hints, appearance: appearance, imageCount: read.imageCount) {
             case .index(let index):
@@ -1034,6 +1115,19 @@ enum DesktopPicture {
                 token = "neutral"
             }
         }
+        let accessPlace = folderPlace ?? url.map { WallpaperPathPlace.classify($0.path) }
+        let accessStatus: FolderAccessStatus
+        if let accessPlace {
+            accessStatus = FolderAccessRecheck.status(
+                place: accessPlace,
+                volumeKind: accessPlace == folderPlace ? accessVolume : .none,
+                asked: askedLocations,
+                granted: grantedLocations,
+                denied: deniedLocations
+            )
+        } else {
+            accessStatus = .notNeeded
+        }
         return DesktopPictureJob(
             cacheKey: WallpaperCacheIdentity.key(
                 token: token,
@@ -1044,7 +1138,8 @@ enum DesktopPicture {
                 appearance: shownAerial == nil ? appearance : .light,
                 kind: kind,
                 imageIndex: url == nil ? nil : imageIndex,
-                storeModified: stored.modified
+                storeModified: stored.modified,
+                access: accessStatus
             ),
             url: url,
             imageIndex: imageIndex,
@@ -1061,13 +1156,13 @@ enum DesktopPicture {
             solidColor: color,
             aerialAssetID: shownAerial,
             aerialRecord: aerial.record,
-            pointSize: screen.frame.size,
+            pointSize: frame.size,
             pixelWidth: pixelW,
             pixelHeight: pixelH,
-            screenX: Double(screen.frame.origin.x),
-            screenY: Double(screen.frame.origin.y),
-            screenWidth: Double(screen.frame.size.width),
-            screenHeight: Double(screen.frame.size.height),
+            screenX: Double(frame.origin.x),
+            screenY: Double(frame.origin.y),
+            screenWidth: Double(frame.size.width),
+            screenHeight: Double(frame.size.height),
             askPath: askPath,
             askPlace: askPlace,
             askVolumeKind: askVolumeKind,
@@ -1281,6 +1376,7 @@ enum WallpaperFileAccess {
     )
 
     static func inspect(_ choice: WallpaperStoreChoice?) -> Report {
+        if Thread.isMainThread { return empty }
         guard let choice, choice.provider == WallpaperStoreIndex.imageProvider, !choice.isFolder else {
             return empty
         }
@@ -1329,6 +1425,7 @@ enum WallpaperFileAccess {
     /// Nil means the path was left closed or is not absolute, so the file was not touched.
     /// A protected path is opened only after that place has been allowed.
     static func look(_ path: String, includingProtected: Bool = false) -> Look? {
+        if Thread.isMainThread { return nil }
         let normalized = WallpaperPathPlace.normalized(path)
         let place = WallpaperPathPlace.classify(normalized)
         if (place.isProtected && !includingProtected) || !normalized.hasPrefix("/") {
@@ -1523,6 +1620,15 @@ enum WallpaperStoreReader {
 /// `apr`, `h24`, and `solar` on a HEIC file. The tag is only a hint: the value is
 /// a property list in base 64, and a tag with no usable value still counts as present.
 enum WallpaperFileMetadata {
+    /// Reads the file off the main thread. A call on the main thread returns no frames,
+    /// so the open cannot stall there. The picture load calls this from the picture queue.
+    static func readOffMainThread(at url: URL) -> (hints: WallpaperMetadataHints, imageCount: Int, pixelWidth: Int, pixelHeight: Int) {
+        if Thread.isMainThread {
+            return (.none, 0, 0, 0)
+        }
+        return read(at: url)
+    }
+
     static func read(at url: URL) -> (hints: WallpaperMetadataHints, imageCount: Int, pixelWidth: Int, pixelHeight: Int) {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
@@ -1545,7 +1651,9 @@ enum WallpaperFileMetadata {
     }
 
     /// One pixel from a very small picture. Large files are not decoded here.
+    /// A call on the main thread returns nil instead of decoding.
     static func averageColor(at url: URL) -> WallpaperSolidColor? {
+        if Thread.isMainThread { return nil }
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
         let thumbnailOptions: [CFString: Any] = [

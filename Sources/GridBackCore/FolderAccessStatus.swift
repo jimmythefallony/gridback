@@ -49,9 +49,80 @@ public enum FolderAccessStatus: String, CaseIterable, Equatable, Sendable {
     /// A silent read can raise the system prompt on a folder that has not been decided.
     /// Only a folder that was already allowed or refused may be read with no question.
     public static func mayProbeSilently(_ status: FolderAccessStatus) -> Bool {
+        FolderAccessRecheck.eligible(status, settingsOpen: false)
+    }
+}
+
+/// A silent re-check of a wallpaper folder that already has an answer.
+/// Grid open and becoming active both use it, whether or not Settings is open.
+/// A place that has not been asked is never read, so the system prompt stays closed.
+public enum FolderAccessRecheck {
+    /// macOS can hand a grant over after the first read of an allowed place.
+    public static let retryDelay: TimeInterval = 1
+
+    /// The saved answer for one place. A denial wins, the same way the Settings line does.
+    public static func status(
+        place: WallpaperPathPlace,
+        volumeKind: FolderVolumeKind,
+        asked: Set<WallpaperPathPlace>,
+        granted: Set<WallpaperPathPlace>,
+        denied: Set<WallpaperPathPlace>
+    ) -> FolderAccessStatus {
+        let lastRead: FolderReadResult
+        if denied.contains(place) {
+            lastRead = .denied
+        } else if granted.contains(place) {
+            lastRead = .granted
+        } else {
+            lastRead = .unknown
+        }
+        return FolderAccessStatus.make(
+            place: place,
+            volumeKind: volumeKind,
+            asked: asked.contains(place),
+            granted: granted.contains(place),
+            denied: denied.contains(place),
+            lastRead: lastRead
+        )
+    }
+
+    /// Allowed and Not allowed only. `settingsOpen` does not change the answer:
+    /// the check runs with Settings closed, and a place that has not been asked is skipped.
+    public static func eligible(_ status: FolderAccessStatus, settingsOpen _: Bool) -> Bool {
         switch status {
         case .allowed, .notAllowed:
             return true
+        case .notNeeded, .notAsked, .notNow, .unsupported:
+            return false
+        }
+    }
+
+    /// The grid can show the plain fill at once while a check is still running.
+    /// An allowed place, and a place that needs no permission, wait for the picture.
+    public static func opensOnPlainFill(_ status: FolderAccessStatus) -> Bool {
+        switch status {
+        case .notAllowed, .notAsked, .notNow, .unsupported:
+            return true
+        case .allowed, .notNeeded:
+            return false
+        }
+    }
+
+    /// One later read. An allowed place always gets it: macOS can hand the grant over
+    /// after the first read. A refused place gets it only when this read just succeeded,
+    /// so the picture can be opened a moment later. A place that stays refused does not.
+    /// `retriesUsed` is how many later reads have already been scheduled.
+    public static func shouldRetry(
+        status: FolderAccessStatus,
+        readSucceeded: Bool,
+        retriesUsed: Int
+    ) -> Bool {
+        guard retriesUsed < 1 else { return false }
+        switch status {
+        case .allowed:
+            return true
+        case .notAllowed:
+            return readSucceeded
         case .notNeeded, .notAsked, .notNow, .unsupported:
             return false
         }

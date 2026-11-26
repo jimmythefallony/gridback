@@ -123,6 +123,7 @@ final class GridBackModel: ObservableObject {
 
     var folderAsked: Set<WallpaperPathPlace> { explainer.asked }
     var folderGranted: Set<WallpaperPathPlace> { explainer.granted }
+    var folderDenied: Set<WallpaperPathPlace> { explainer.denied }
     var folderDragActive: Bool { heldDrag.isActive || pointerDragActive }
 
     func setPointerDragActive(_ active: Bool) {

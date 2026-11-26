@@ -357,7 +357,8 @@ enum FolderFileLocality {
 }
 
 /// One deliberate read of the first bytes of the wallpaper file.
-/// The read runs off the main thread so the system prompt can appear, and it never runs while the grid is opening.
+/// The read runs off the main thread. A silent re-check may run while the grid is open,
+/// and only for a folder that was already allowed or refused, so the system prompt stays closed.
 enum FolderAccessRead {
     private static let queue = DispatchQueue(
         label: "com.jimmythefallony.GridBack.folder-access",

@@ -1264,6 +1264,8 @@ public enum WallpaperLogName {
 /// Identity of one blurred backdrop. Appearance is part of the key so a Light
 /// frame is not reused after the system switches to Dark. The store's
 /// modification time drops a cached blur after the wallpaper choice changes.
+/// Folder access is part of the key so a plain fill kept while a folder was
+/// refused is not shown again after that folder is allowed.
 public enum WallpaperCacheIdentity {
     public static func key(
         token: String,
@@ -1272,10 +1274,11 @@ public enum WallpaperCacheIdentity {
         appearance: WallpaperAppearance,
         kind: WallpaperKind,
         imageIndex: Int?,
-        storeModified: TimeInterval = 0
+        storeModified: TimeInterval = 0,
+        access: FolderAccessStatus
     ) -> String {
         let index = imageIndex.map(String.init) ?? "plain"
         let stamp = storeModified.isFinite ? String(Int(storeModified.rounded())) : "0"
-        return "\(token)|\(pixelWidth)x\(pixelHeight)|\(appearance.rawValue)|\(kind.rawValue)|\(index)|\(stamp)"
+        return "\(token)|\(pixelWidth)x\(pixelHeight)|\(appearance.rawValue)|\(kind.rawValue)|\(index)|\(stamp)|\(access.rawValue)"
     }
 }
