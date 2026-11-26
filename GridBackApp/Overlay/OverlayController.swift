@@ -580,7 +580,8 @@ final class OverlayController: NSObject {
         let outcomeName = DiagnosticOutcome(outcome).logName
         let scheduledIdentity = Int(DiagnosticPathHash.number(for: cacheKey))
         let currentIdentity = Int(DiagnosticPathHash.number(for: pictureKey ?? ""))
-        log.info("present ms=\(DiagnosticClock.milliseconds, privacy: .public) outcome=\(outcomeName, privacy: .public) scheduledOpen=\(openedAs, privacy: .public) currentOpen=\(openCount, privacy: .public) scheduledIdentity=\(scheduledIdentity, privacy: .public) currentIdentity=\(currentIdentity, privacy: .public)")
+        let currentOpen = self.openCount
+        log.info("present ms=\(DiagnosticClock.milliseconds, privacy: .public) outcome=\(outcomeName, privacy: .public) scheduledOpen=\(openedAs, privacy: .public) currentOpen=\(currentOpen, privacy: .public) scheduledIdentity=\(scheduledIdentity, privacy: .public) currentIdentity=\(currentIdentity, privacy: .public)")
         switch outcome {
         case .ignore:
             log.info("DesktopPicture drop stale generation=\(generation, privacy: .public)")
