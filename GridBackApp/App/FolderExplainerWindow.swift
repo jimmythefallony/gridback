@@ -24,11 +24,16 @@ final class FolderExplainerController: NSObject, NSWindowDelegate {
     func considerCurrentWallpaper() {
         guard let model, !model.isOverlayVisible else { return }
         guard let screen = PrimaryDisplay.screen() else { return }
-        let job = DesktopPicture.job(
+        let request = DesktopPicture.request(
             on: screen,
             askedLocations: model.folderAsked,
-            grantedLocations: model.folderGranted
+            grantedLocations: model.folderGranted,
+            deniedLocations: model.folderDenied
         )
+        // The picture job reads files, so it cannot run here. The offer still waits for that result.
+        let job = DispatchQueue.global(qos: .userInitiated).sync {
+            DesktopPicture.job(request)
+        }
         guard let place = job.askPlace, let path = job.askPath else {
             _ = model.clearFolderExplainer()
             suspend()
