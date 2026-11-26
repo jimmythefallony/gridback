@@ -15,6 +15,10 @@ final class OverlayController: NSObject {
     private var screenObserver: NSObjectProtocol?
     /// Bumps on each show so a delayed pass cannot reopen a grid that already closed.
     private var showGeneration = 0
+    /// Open and close fade. Its generation belongs to the alpha animation, not the picture load.
+    private var fade = GridFade()
+    /// Runs once the close has faded out. A reverse drops it, so the app is not hidden early.
+    private var onHidden: (() -> Void)?
     /// One dismiss per open. Toggling twice would show the system launcher again.
     private var didDismissSystemLauncher = false
     private var escapeMonitor: Any?
@@ -106,6 +110,10 @@ final class OverlayController: NSObject {
         dismissSystemLauncherIfNeeded()
         installEscapeMonitor()
         startDockWatch()
+        // A close is still on screen. Bring it back from the alpha it has reached.
+        if panel.isVisible, fade.phase == .closing {
+            beginOpen(fromHidden: false)
+        }
         ensurePicture(generation: generation, on: screen)
         DispatchQueue.main.async { [weak self] in
             guard let self, self.showGeneration == generation, self.wantsGrid else { return }
@@ -124,7 +132,11 @@ final class OverlayController: NSObject {
         }
     }
 
-    func hide() {
+    func hide(completion: @escaping () -> Void) {
+        // A second hide while the fade-out is playing must not restart it or hide the app early.
+        if fade.phase == .closing {
+            return
+        }
         GridOpenTrace.shared.gridClosed()
         wantsGrid = false
         showingPlainFill = false
@@ -138,8 +150,36 @@ final class OverlayController: NSObject {
         inflightPictureKey = nil
         aerialFailedKey = nil
         stopDockWatch()
-        dockBackdrop?.orderOut(nil)
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible, let backdrop = dockBackdrop else {
+            settleClosedWithoutAnimation()
+            completion()
+            return
+        }
+        onHidden = completion
+        OverlayFade.releaseInteraction(on: panel)
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard let transition = fade.hide(reduceMotion: reduced) else {
+            settleClosedWithoutAnimation()
+            let done = onHidden
+            onHidden = nil
+            done?()
+            return
+        }
+        model?.setFadePhase(.closing)
+        let generation = transition.generation
+        OverlayFade.animate(
+            panel: panel,
+            backdrop: backdrop,
+            to: CGFloat(transition.alpha),
+            duration: transition.duration,
+            curve: transition.curve
+        ) { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.finishFade(generation: generation)
+            }
+        }
     }
 
     /// Dock preferences can land on disk after the Dock has already started magnifying.
@@ -176,7 +216,7 @@ final class OverlayController: NSObject {
     }
 
     private func claimKeyboard() {
-        guard panel?.isVisible == true else { return }
+        guard wantsGrid, fade.phase != .closing, panel?.isVisible == true else { return }
         // Stay accessory for the whole lifetime so GridBack never appears in
         // the Dock or in Command-Tab. Presentation options are not changed.
         NSApp.activate(ignoringOtherApps: true)
@@ -651,21 +691,89 @@ final class OverlayController: NSObject {
         guard wantsGrid, let panel, let backdrop = dockBackdrop else { return }
         panel.level = OverlayPanel.gridLevel
         backdrop.level = DockBackdropPanel.backdropLevel
-        guard !panel.isVisible else { return }
-        panel.alphaValue = 1
-        backdrop.alphaValue = 1
-        NSApp.unhide(nil)
-        backdrop.orderFrontRegardless()
-        panel.orderFrontRegardless()
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeKey()
+        // A close leaves both windows up until the fade ends. Treating "already
+        // visible" as fully open would leave them half transparent and click-through.
+        if panel.isVisible {
+            if fade.phase == .closing {
+                beginOpen(fromHidden: false)
+            }
+            return
+        }
+        beginOpen(fromHidden: true)
+    }
+
+    /// Orders the windows in at alpha 0, or continues a close back up to opaque.
+    /// The picture is already in place. This does not wait on anything else.
+    private func beginOpen(fromHidden: Bool) {
+        guard let panel, let backdrop = dockBackdrop else { return }
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard let transition = fade.show(reduceMotion: reduced) else { return }
+        onHidden = nil
+        if fromHidden {
+            OverlayFade.orderFrontHidden(panel: panel, backdrop: backdrop)
+        }
+        OverlayFade.restoreInteraction(on: panel)
         panel.level = OverlayPanel.gridLevel
         backdrop.level = DockBackdropPanel.backdropLevel
+        model?.setFadePhase(.opening)
+        let generation = transition.generation
+        OverlayFade.animate(
+            panel: panel,
+            backdrop: backdrop,
+            to: CGFloat(transition.alpha),
+            duration: transition.duration,
+            curve: transition.curve
+        ) { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.finishFade(generation: generation)
+            }
+        }
         claimKeyboard()
         if let screen = PrimaryDisplay.screen() {
             logDockBand(panel: panel, backdrop: backdrop, on: screen)
         }
         GridOpenTrace.shared.panelOrderedFront()
+    }
+
+    private func finishFade(generation: Int) {
+        guard let phase = fade.complete(generation: generation) else { return }
+        switch phase {
+        case .open:
+            model?.setFadePhase(.open)
+        case .closed:
+            orderOutAndReset()
+            model?.setFadePhase(.closed)
+            let done = onHidden
+            onHidden = nil
+            done?()
+        case .opening, .closing:
+            break
+        }
+    }
+
+    /// Nothing is on screen, so there is no fade to play.
+    private func settleClosedWithoutAnimation() {
+        if fade.phase == .opening || fade.phase == .open {
+            _ = fade.hide(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        }
+        if fade.phase == .closing {
+            _ = fade.complete(generation: fade.generation)
+        }
+        orderOutAndReset()
+        model?.setFadePhase(.closed)
+    }
+
+    private func orderOutAndReset() {
+        panel?.orderOut(nil)
+        dockBackdrop?.orderOut(nil)
+        if let panel {
+            OverlayFade.restoreInteraction(on: panel)
+        }
+        if let panel, let backdrop = dockBackdrop {
+            OverlayFade.setAlpha(1, panel: panel, backdrop: backdrop)
+        }
     }
 
     private func makePanel(on screen: NSScreen, model: GridBackModel) -> OverlayPanel {

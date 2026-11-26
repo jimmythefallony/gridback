@@ -202,3 +202,77 @@ enum BackdropSurface {
         return fade
     }
 }
+
+/// Fades the grid and the Dock backdrop together. The Dock itself is not in this group.
+/// Both windows stay opaque; only their alpha moves, so the level and the black fill stay put.
+enum OverlayFade {
+    static func setAlpha(_ alpha: CGFloat, panel: NSWindow, backdrop: NSWindow) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.alphaValue = alpha
+        backdrop.alphaValue = alpha
+        CATransaction.commit()
+    }
+
+    /// Puts both windows on screen at alpha 0, before the fade-in starts.
+    /// One disabled transaction, so a full-opacity frame cannot slip in between.
+    static func orderFrontHidden(panel: NSWindow, backdrop: NSWindow) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.alphaValue = 0
+        backdrop.alphaValue = 0
+        NSApp.unhide(nil)
+        backdrop.orderFrontRegardless()
+        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeKey()
+        panel.alphaValue = 0
+        backdrop.alphaValue = 0
+        CATransaction.commit()
+    }
+
+    /// One animation group, so the two windows stay in step.
+    /// A new group retargets an in-flight fade from the alpha on screen.
+    static func animate(
+        panel: NSWindow,
+        backdrop: NSWindow,
+        to alpha: CGFloat,
+        duration: TimeInterval,
+        curve: GridFade.Curve,
+        completion: @escaping () -> Void
+    ) {
+        let timing = OverlayFade.timing(curve)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = timing
+            panel.animator().alphaValue = alpha
+            backdrop.animator().alphaValue = alpha
+        } completionHandler: {
+            completion()
+        }
+    }
+
+    /// Clicks pass through, and the panel gives up the keyboard, for the fade-out.
+    static func releaseInteraction(on panel: NSWindow) {
+        panel.ignoresMouseEvents = true
+        panel.makeFirstResponder(nil)
+        if panel.isKeyWindow {
+            panel.resignKey()
+        }
+    }
+
+    static func restoreInteraction(on panel: NSWindow) {
+        panel.ignoresMouseEvents = false
+    }
+
+    private static func timing(_ curve: GridFade.Curve) -> CAMediaTimingFunction {
+        switch curve {
+        case .easeOut:
+            return CAMediaTimingFunction(name: .easeOut)
+        case .easeIn:
+            return CAMediaTimingFunction(name: .easeIn)
+        case .linear:
+            return CAMediaTimingFunction(name: .linear)
+        }
+    }
+}

@@ -25,6 +25,8 @@ final class GridBackModel: ObservableObject {
     private var folderCloseInFlight = false
     @Published private(set) var selectedResultIndex = 0
     @Published private(set) var isOverlayVisible = false
+    /// Icon-page zoom. Search, Settings, and the folder explainer keep reading `isOverlayVisible`.
+    @Published private(set) var fadePhase: GridFade.Phase = .closed
     @Published private(set) var launchError: String?
     @Published private(set) var shortcut: ShortcutChord
     @Published var heldDrag = HeldDrag() {
@@ -315,10 +317,7 @@ final class GridBackModel: ObservableObject {
     }
 
     func showOverlay() {
-        searchQuery = ""
-        selectedResultIndex = 0
-        launchError = nil
-        closeFolder()
+        clearDismissedOverlay()
         isOverlayVisible = true
         delegate?.gridBackShowOverlay()
         rescan()
@@ -327,10 +326,24 @@ final class GridBackModel: ObservableObject {
     func hideOverlay() {
         guard isOverlayVisible else { return }
         isOverlayVisible = false
+        delegate?.gridBackHideOverlay()
+    }
+
+    /// The overlay reports each step of the fade. Search and the open folder stay
+    /// until the close has finished, so the fade-out matches what was on screen.
+    /// The next open clears them first if that close was reversed.
+    func setFadePhase(_ phase: GridFade.Phase) {
+        fadePhase = phase
+        if phase == .closed {
+            clearDismissedOverlay()
+        }
+    }
+
+    private func clearDismissedOverlay() {
         searchQuery = ""
+        selectedResultIndex = 0
         launchError = nil
         closeFolder()
-        delegate?.gridBackHideOverlay()
     }
 
     func showSettings() {
