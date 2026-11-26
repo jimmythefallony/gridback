@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/gridback-icon.png" width="128" alt="GridBack app icon"></p>
+
 # GridBack
 
 **A free, open-source replacement for the classic macOS Launchpad.**
