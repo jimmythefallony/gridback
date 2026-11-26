@@ -670,6 +670,7 @@ final class LaunchGridLayoutTests: XCTestCase {
 
 final class PageSnapTests: XCTestCase {
     func testHalfwayDragSettlesOnTheNextPage() {
+        // Halfway is past the 20% line, so the page still turns exactly once.
         let page = PageSnap.destination(
             currentPage: 1,
             pageCount: 4,
@@ -681,25 +682,64 @@ final class PageSnapTests: XCTestCase {
     }
 
     func testShortDragWithoutFlickStaysPut() {
+        // 15% of the page, released with no speed, snaps back.
         let page = PageSnap.destination(
             currentPage: 1,
             pageCount: 4,
-            translationX: -200,
+            translationX: -150,
             velocityX: 0,
             pageWidth: 1000
         )
         XCTAssertEqual(page, 1)
     }
 
+    func testDragOfTwentyPercentTurnsOnePage() {
+        let width = 1000.0
+        let page = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -PageSnap.commitDistanceFraction * width,
+            velocityX: 0,
+            pageWidth: width
+        )
+        XCTAssertEqual(page, 2)
+    }
+
     func testQuickFlickTurnsThePage() {
         let page = PageSnap.destination(
             currentPage: 1,
             pageCount: 4,
-            translationX: -80,
-            velocityX: -2800,
+            translationX: -40,
+            velocityX: -400,
             pageWidth: 1000
         )
         XCTAssertEqual(page, 2)
+    }
+
+    func testReversedFlickCancelsTheTurn() {
+        let cancelled = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -400,
+            velocityX: 400,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(cancelled, 1)
+        let slowDriftBack = PageSnap.destination(
+            currentPage: 1,
+            pageCount: 4,
+            translationX: -400,
+            velocityX: 100,
+            pageWidth: 1000
+        )
+        XCTAssertEqual(slowDriftBack, 2)
+    }
+
+    func testFastFlickNeverSkipsAPage() {
+        XCTAssertEqual(
+            PageSnap.destination(currentPage: 3, pageCount: 20, translationX: -40, velocityX: -5000, pageWidth: 200),
+            4
+        )
     }
 
     func testRightwardSwipeMovesToThePreviousPage() {
@@ -715,13 +755,74 @@ final class PageSnapTests: XCTestCase {
 
     func testCannotSnapPastTheEnds() {
         XCTAssertEqual(
-            PageSnap.destination(currentPage: 0, pageCount: 3, translationX: 900, velocityX: 2000, pageWidth: 1000),
+            PageSnap.destination(currentPage: 0, pageCount: 5, translationX: 800, velocityX: 5000, pageWidth: 1000),
             0
         )
         XCTAssertEqual(
-            PageSnap.destination(currentPage: 2, pageCount: 3, translationX: -900, velocityX: -2000, pageWidth: 1000),
-            2
+            PageSnap.destination(currentPage: 4, pageCount: 5, translationX: -800, velocityX: -5000, pageWidth: 1000),
+            4
         )
+    }
+
+    func testWindowedVelocityIgnoresStationaryAndOldSamples() {
+        var tracker = PageDragTracker()
+        tracker.add(deltaX: 100, deltaY: 0, time: 0)
+        tracker.add(deltaX: 30, deltaY: 0, time: 1.00)
+        tracker.add(deltaX: 0, deltaY: 0, time: 1.02)
+        tracker.add(deltaX: 30, deltaY: 0, time: 1.04)
+        tracker.add(deltaX: 0, deltaY: 0, time: 1.06)
+        XCTAssertEqual(tracker.velocityX(), 750, accuracy: 0.001)
+
+        var paused = PageDragTracker()
+        paused.add(deltaX: 30, deltaY: 0, time: 1.00)
+        paused.add(deltaX: 30, deltaY: 0, time: 1.04)
+        paused.add(deltaX: 0, deltaY: 0, time: 1.04 + PageDragTracker.velocityWindow + 0.05)
+        XCTAssertEqual(paused.velocityX(), 0, accuracy: 0.001)
+    }
+
+    func testAVerticalDragIsNotMostlyHorizontal() {
+        var tracker = PageDragTracker()
+        tracker.add(deltaX: 12, deltaY: 80, time: 1)
+        tracker.add(deltaX: 8, deltaY: 40, time: 1.04)
+        XCTAssertFalse(tracker.isMostlyHorizontal)
+    }
+
+    func testSettleInitialVelocityNormalisesSignCapAndNearZero() {
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: 2, remainingPages: 0.5, pageWidth: 1000),
+            4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: -2, remainingPages: -0.5, pageWidth: 1000),
+            4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: -2, remainingPages: 0.5, pageWidth: 1000),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: 100, remainingPages: 0.25, pageWidth: 1000),
+            PageSnap.settleVelocityCap,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: 5, remainingPages: 0.0005, pageWidth: 1000),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            PageSnap.settleInitialVelocity(pagesPerSecond: 5, remainingPages: 0, pageWidth: 1000),
+            0,
+            accuracy: 0.001
+        )
+    }
+
+    func testSwipeStartingBetweenPagesFollowsFromThere() {
+        let visual = PageSnap.visualPage(currentPage: 1.4, pageCount: 4, translationX: -100, pageWidth: 1000)
+        XCTAssertEqual(visual, 1.5, accuracy: 0.001)
     }
 
     func testRubberBandMovesLessThanTheFinger() {

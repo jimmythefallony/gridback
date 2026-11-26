@@ -8,7 +8,10 @@ struct OverlayRootView: View {
     @State private var blockLaunch = false
     @State private var visualPage: CGFloat = 0
     @State private var isSwiping = false
-    @State private var suppressPageAnimation = false
+    @State private var fingerDown = false
+    @State private var swipeOrigin: Double = 0
+    @State private var settleGeneration = 0
+    @State private var settleTarget: Int?
     @State private var swipe = PageDragTracker()
     @State private var hoverTarget: String?
     @State private var hoverStarted: TimeInterval?
@@ -96,8 +99,12 @@ struct OverlayRootView: View {
                     .opacity(gridChromeVisible ? 1 : 0)
 
                 if !model.isSearching && !pages.isEmpty {
-                    PageControls(pageCount: pages.count, position: visualPage) { page in
-                        turnToPage(page)
+                    PageControls(
+                        pageCount: pages.count,
+                        position: visualPage,
+                        selectedPage: displayedPage
+                    ) { page in
+                        turnToPage(page, pageWidth: chrome.pageWidth)
                     }
                     .position(x: chrome.contentCenterX, y: chrome.pageControlCenterY)
                     .opacity(gridChromeVisible ? 1 : 0)
@@ -180,10 +187,11 @@ struct OverlayRootView: View {
                 updateReorder(at: finger, layout: dragLayout)
             }
             .onChange(of: displayedPage) { _, newPage in
-                guard !isSwiping, !suppressPageAnimation else { return }
-                withAnimation(.easeOut(duration: 0.35)) {
-                    visualPage = CGFloat(newPage)
+                // The swipe commit sets this page itself and animates with the finger's speed.
+                if self.isSwiping && self.settleTarget == newPage && !self.fingerDown {
+                    return
                 }
+                self.followPage(newPage, pageWidth: chrome.pageWidth)
             }
             .onChange(of: model.heldDrag.suppressCommit) { _, suppressed in
                 if suppressed {
@@ -542,6 +550,16 @@ struct OverlayRootView: View {
 
     private func handleScroll(_ event: NSEvent, pageWidth: Double, pageCount: Int) -> Bool {
         guard model.isOverlayVisible, !model.isSearching, reorder == nil, pageCount > 0 else {
+            if fingerDown {
+                fingerDown = false
+                settleGeneration += 1
+                isSwiping = false
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    self.visualPage = CGFloat(self.model.currentPage)
+                }
+            }
             swipe.reset()
             return false
         }
@@ -551,42 +569,77 @@ struct OverlayRootView: View {
         }
         let phase = event.phase
         if phase.contains(.cancelled) {
-            swipe.reset()
-            settle(on: model.currentPage)
+            guard fingerDown else {
+                swipe.reset()
+                return true
+            }
+            swipe.add(
+                deltaX: Double(event.scrollingDeltaX),
+                deltaY: Double(event.scrollingDeltaY),
+                time: event.timestamp
+            )
+            let velocity = swipe.velocityX()
+            fingerDown = false
+            settle(on: model.currentPage, velocityX: velocity, pageWidth: pageWidth)
             return true
         }
         if phase.contains(.began) {
+            settleGeneration += 1
             swipe.reset()
+            swipeOrigin = Double(visualPage)
+            fingerDown = true
             isSwiping = true
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                self.visualPage = CGFloat(self.swipeOrigin)
+            }
         }
         if phase.contains(.began) || phase.contains(.changed) || phase.contains(.stationary) {
-            swipe.add(deltaX: Double(event.scrollingDeltaX), deltaY: Double(event.scrollingDeltaY), time: event.timestamp)
+            guard fingerDown else { return true }
+            swipe.add(
+                deltaX: Double(event.scrollingDeltaX),
+                deltaY: Double(event.scrollingDeltaY),
+                time: event.timestamp
+            )
             guard swipe.isMostlyHorizontal || abs(swipe.translationX) > 12 else { return true }
             isSwiping = true
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                visualPage = PageSnap.visualPage(
-                    currentPage: model.currentPage,
+                self.visualPage = CGFloat(PageSnap.visualPage(
+                    currentPage: self.swipeOrigin,
                     pageCount: pageCount,
-                    translationX: swipe.translationX,
+                    translationX: self.swipe.translationX,
                     pageWidth: pageWidth
-                )
+                ))
             }
             return true
         }
         if phase.contains(.ended) {
-            let destination = swipe.isMostlyHorizontal
+            guard fingerDown else {
+                swipe.reset()
+                return true
+            }
+            swipe.add(
+                deltaX: Double(event.scrollingDeltaX),
+                deltaY: Double(event.scrollingDeltaY),
+                time: event.timestamp
+            )
+            let horizontal = swipe.isMostlyHorizontal
+            let velocity = swipe.velocityX()
+            let translation = swipe.translationX
+            fingerDown = false
+            let destination = horizontal
                 ? PageSnap.destination(
                     currentPage: model.currentPage,
                     pageCount: pageCount,
-                    translationX: swipe.translationX,
-                    velocityX: swipe.velocityX(),
+                    translationX: translation,
+                    velocityX: velocity,
                     pageWidth: pageWidth
                 )
                 : model.currentPage
-            swipe.reset()
-            settle(on: destination)
+            settle(on: destination, velocityX: velocity, pageWidth: pageWidth)
             return true
         }
         return false
@@ -847,26 +900,81 @@ struct OverlayRootView: View {
         )
     }
 
-    private func turnToPage(_ page: Int) {
+    private func turnToPage(_ page: Int, pageWidth: Double) {
         guard model.openFolderID == nil, !model.layout.pages.isEmpty else { return }
         let clamped = min(max(page, 0), model.layout.pages.count - 1)
-        isSwiping = false
+        fingerDown = false
         swipe.reset()
+        settleGeneration += 1
+        isSwiping = false
+        if model.currentPage == clamped {
+            guard abs(Double(visualPage) - Double(clamped)) > 0.001 else { return }
+            settleTarget = clamped
+            animateVisual(to: clamped, pageWidth: pageWidth, velocityX: 0, generation: settleGeneration)
+            return
+        }
         model.selectPage(clamped)
     }
 
-    private func settle(on page: Int) {
-        withAnimation(.easeOut(duration: 0.35)) {
-            visualPage = CGFloat(page)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
-            suppressPageAnimation = true
-            isSwiping = false
-            model.selectPage(page)
-            visualPage = CGFloat(page)
-            DispatchQueue.main.async {
-                suppressPageAnimation = false
+    /// Arrow keys, dots, and an icon dragged to the screen edge. Same spring as a swipe, with no finger speed.
+    private func followPage(_ page: Int, pageWidth: Double) {
+        fingerDown = false
+        swipe.reset()
+        settleGeneration += 1
+        isSwiping = false
+        settleTarget = page
+        animateVisual(to: page, pageWidth: pageWidth, velocityX: 0, generation: settleGeneration)
+    }
+
+    private func settle(on page: Int, velocityX: Double, pageWidth: Double) {
+        let last = max(model.layout.pages.count - 1, 0)
+        let clamped = min(max(page, 0), last)
+        fingerDown = false
+        swipe.reset()
+        settleGeneration += 1
+        let generation = settleGeneration
+        settleTarget = clamped
+        isSwiping = true
+        model.selectPage(clamped)
+        animateVisual(to: clamped, pageWidth: pageWidth, velocityX: velocityX, generation: generation)
+    }
+
+    private func animateVisual(to page: Int, pageWidth: Double, velocityX: Double, generation: Int) {
+        let target = CGFloat(page)
+        let remainingPoints = abs(Double(target - visualPage)) * pageWidth
+        if pageWidth <= 0 || remainingPoints < PageSnap.settleSnapDistance {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                self.visualPage = target
             }
+            if generation == settleGeneration {
+                isSwiping = false
+            }
+            return
+        }
+
+        let pagesPerSecond = -velocityX / pageWidth
+        let remainingPages = Double(target - visualPage)
+        let inherited = reduceMotion
+            ? 0
+            : PageSnap.settleInitialVelocity(
+                pagesPerSecond: pagesPerSecond,
+                remainingPages: remainingPages,
+                pageWidth: pageWidth
+            )
+        let animation: Animation = reduceMotion
+            ? .easeOut(duration: PageSnap.reduceMotionSettleDuration)
+            : .interpolatingSpring(
+                duration: PageSnap.settleSpringDuration,
+                bounce: 0,
+                initialVelocity: inherited
+            )
+        withAnimation(animation, completionCriteria: .logicallyComplete) {
+            self.visualPage = target
+        } completion: {
+            guard generation == self.settleGeneration else { return }
+            self.isSwiping = false
         }
     }
 

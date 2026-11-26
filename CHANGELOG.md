@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Swiping between pages now responds to quick flicks and settles more smoothly.
 - After a folder is allowed in System Settings, opening the grid shows the blurred wallpaper even when GridBack Settings is closed.
 - Settings shows whether GridBack can read the wallpaper's folder, and what to do next.
 - GridBack asks once, in a small window, before it opens a wallpaper in Desktop, Documents, Downloads, or on a removable disk. The window is visible on every Space. If macOS has already refused that folder, the plain fallback stays. An iCloud Drive image is opened only when it is already on this Mac. A shortcut pressed while the system folder prompt is open is ignored.

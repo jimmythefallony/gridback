@@ -4,13 +4,16 @@ import SwiftUI
 struct PageControls: View {
     var pageCount: Int
     var position: CGFloat
+    /// The page the model has committed. Selection updates with this, while
+    /// `position` still follows the moving strip.
+    var selectedPage: Int
     var onSelect: (Int) -> Void
     @Environment(\.ink) private var ink
 
     var body: some View {
         HStack(spacing: 18) {
-            pageArrow(systemName: "chevron.left", enabled: pageCount > 0 && position > 0.5, label: String(localized: "Previous page")) {
-                onSelect(max(Int(position.rounded()) - 1, 0))
+            pageArrow(systemName: "chevron.left", enabled: pageCount > 0 && selectedPage > 0, label: String(localized: "Previous page")) {
+                onSelect(max(selectedPage - 1, 0))
             }
 
             HStack(spacing: 8) {
@@ -23,16 +26,16 @@ struct PageControls: View {
                         .contentShape(Rectangle())
                         .onTapGesture { onSelect(index) }
                         .accessibilityLabel(String(localized: "Page \(index + 1)"))
-                        .accessibilityAddTraits(distance < 0.5 ? .isSelected : [])
+                        .accessibilityAddTraits(index == selectedPage ? .isSelected : [])
                 }
             }
 
             pageArrow(
                 systemName: "chevron.right",
-                enabled: pageCount > 0 && position < CGFloat(pageCount - 1) - 0.5,
+                enabled: pageCount > 0 && selectedPage < pageCount - 1,
                 label: String(localized: "Next page")
             ) {
-                onSelect(min(Int(position.rounded()) + 1, max(pageCount - 1, 0)))
+                onSelect(min(selectedPage + 1, max(pageCount - 1, 0)))
             }
         }
     }
