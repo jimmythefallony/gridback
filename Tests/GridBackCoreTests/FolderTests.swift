@@ -645,7 +645,7 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(escape(&grid, folderIsOpen: false), .key(.dismiss))
 
         var inside = HeldDrag()
-        inside.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        inside.pickInsideFolder(appID: "dictionary", folderID: folderID, index: 1, origin: origin)
         XCTAssertEqual(inside.heldAppID, "dictionary")
         guard case .cancelDrag(let insideCancel) = escape(&inside, folderIsOpen: true) else {
             return XCTFail("folder drag did not cancel")
@@ -656,7 +656,7 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(escape(&inside, folderIsOpen: true), .key(.closeFolder))
 
         var extracted = HeldDrag()
-        extracted.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        extracted.pickInsideFolder(appID: "dictionary", folderID: folderID, index: 1, origin: origin)
         extracted.markExtracted()
         extracted.beginInsertion(folderID: folderID, index: 0)
         guard case .cancelDrag(let transition) = escape(&extracted, folderIsOpen: true) else {
@@ -672,7 +672,7 @@ final class FolderTests: XCTestCase {
         inserted.beginInsertion(folderID: folderID, index: 1)
         XCTAssertEqual(inserted.complete(), .insert(appID: "notes", folderID: folderID, index: 1))
         var dropped = HeldDrag()
-        dropped.pickInsideFolder(appID: "dictionary", folderID: folderID, origin: origin)
+        dropped.pickInsideFolder(appID: "dictionary", folderID: folderID, index: 1, origin: origin)
         dropped.markExtracted()
         XCTAssertEqual(dropped.heldAppID, "dictionary")
         XCTAssertEqual(dropped.complete(), .reorder)
@@ -726,5 +726,117 @@ final class FolderTests: XCTestCase {
         XCTAssertEqual(opened.centerY, slotY, accuracy: 0.001)
         XCTAssertEqual(opened.scale, 1, accuracy: 0.001)
         XCTAssertEqual(opened.opacity, 1, accuracy: 0.001)
+    }
+
+    func testMoveWithinFolderReordersAndLeavesUnknownIdsAlone() {
+        let folder = AppFolder(id: "folder.kept", name: "Folder", appIDs: ["a", "b", "c"])
+        let layout = Layout(pages: [[.folder(folder.id), .app("d")]], folders: [folder], metrics: twoByTwo)
+
+        let toFront = FolderEditing.moveWithinFolder(layout: layout, appID: "c", folderID: folder.id, to: 0)
+        XCTAssertEqual(toFront.folders[0].appIDs, ["c", "a", "b"])
+        XCTAssertEqual(toFront.pages, layout.pages)
+        XCTAssertEqual(FolderEditing.previewOrder(existing: folder.appIDs, appID: "c", index: 0), toFront.folders[0].appIDs)
+
+        let toEnd = FolderEditing.moveWithinFolder(layout: layout, appID: "a", folderID: folder.id, to: 9)
+        XCTAssertEqual(toEnd.folders[0].appIDs, ["b", "c", "a"])
+        let negative = FolderEditing.moveWithinFolder(layout: layout, appID: "c", folderID: folder.id, to: -4)
+        XCTAssertEqual(negative.folders[0].appIDs, ["c", "a", "b"])
+        XCTAssertEqual(FolderEditing.moveWithinFolder(layout: layout, appID: "b", folderID: folder.id, to: 1), layout)
+        XCTAssertEqual(FolderEditing.moveWithinFolder(layout: layout, appID: "missing", folderID: folder.id, to: 0), layout)
+        XCTAssertEqual(FolderEditing.moveWithinFolder(layout: layout, appID: "a", folderID: "folder.missing", to: 0), layout)
+
+        let other = AppFolder(id: "folder.other", name: "Folder", appIDs: ["z"])
+        let two = Layout(pages: [[.folder(folder.id), .folder(other.id)]], folders: [folder, other], metrics: twoByTwo)
+        XCTAssertEqual(FolderEditing.moveWithinFolder(layout: two, appID: "z", folderID: folder.id, to: 0), two)
+    }
+
+    func testInsideFolderDragKeepsItsIndexUntilEscape() {
+        let origin = FolderEditing.group(
+            layout: Layout(pages: [["voice", "dictionary", "notes"]], metrics: twoByTwo),
+            draggedAppID: "dictionary",
+            targetID: "voice"
+        )
+        let folderID = origin.folders[0].id
+        var drag = HeldDrag()
+        drag.pickInsideFolder(appID: "dictionary", folderID: folderID, index: 1, origin: origin)
+        XCTAssertEqual(drag.heldAppID, "dictionary")
+        drag.updateFolderIndex(0)
+        XCTAssertEqual(drag.complete(), .moveInFolder(appID: "dictionary", folderID: folderID, index: 0))
+        XCTAssertEqual(drag.complete(), .none)
+
+        var cancelled = HeldDrag()
+        cancelled.pickInsideFolder(appID: "dictionary", folderID: folderID, index: 1, origin: origin)
+        cancelled.updateFolderIndex(0)
+        guard case .cancelDrag(let cancellation) = OverlayCommanding.command(
+            keyCode: 53,
+            characters: "",
+            modifiers: [],
+            isSearching: false,
+            folderIsOpen: true,
+            columns: 2,
+            drag: &cancelled
+        ) else {
+            return XCTFail("inside drag did not cancel")
+        }
+        XCTAssertFalse(cancellation.closeTransientFolder)
+        XCTAssertEqual(cancellation.origin.folders[0].appIDs, ["voice", "dictionary"])
+        XCTAssertEqual(cancelled.complete(), .none)
+    }
+
+    func testInsertionIndexCountsTheHeldApp() {
+        let shared = (
+            gridWidth: 700.0,
+            columns: 7,
+            columnStride: 100.0,
+            rowStride: 120.0,
+            iconSide: 64.0,
+            overlayWidth: 1728.0,
+            availableHeight: 800.0
+        )
+        let oneRow = FolderPanelMetrics.openMetrics(
+            gridWidth: shared.gridWidth,
+            columns: shared.columns,
+            columnStride: shared.columnStride,
+            rowStride: shared.rowStride,
+            iconSide: shared.iconSide,
+            overlayWidth: shared.overlayWidth,
+            availableHeight: shared.availableHeight,
+            appCount: 3
+        )
+        XCTAssertEqual(oneRow.rows, 1)
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 10, localY: 40, slotCount: 3, open: oneRow), 0)
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 1000, localY: 40, slotCount: 3, open: oneRow), 2)
+
+        let twoRows = FolderPanelMetrics.openMetrics(
+            gridWidth: shared.gridWidth,
+            columns: shared.columns,
+            columnStride: shared.columnStride,
+            rowStride: shared.rowStride,
+            iconSide: shared.iconSide,
+            overlayWidth: shared.overlayWidth,
+            availableHeight: shared.availableHeight,
+            appCount: 10
+        )
+        XCTAssertEqual(twoRows.rows, 2)
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 10, localY: 40, slotCount: 10, open: twoRows), 0)
+        let secondRow = FolderPanelMetrics.verticalPadding + twoRows.rowStride + 8
+        XCTAssertEqual(FolderPanelMetrics.insertionIndex(localX: 10, localY: secondRow, slotCount: 10, open: twoRows), 7)
+    }
+
+    func testInsertAppCanReturnAnAppToTheSameFolder() {
+        let folder = AppFolder(id: "folder.kept", name: "Folder", appIDs: ["a", "b", "c"])
+        let layout = Layout(pages: [[.folder(folder.id), .app("d")]], folders: [folder], metrics: twoByTwo)
+        let front = FolderEditing.insertApp(layout: layout, appID: "c", folderID: folder.id, at: 0)
+        XCTAssertEqual(front.folders.map(\.id), [folder.id])
+        XCTAssertEqual(front.folders[0].appIDs, ["c", "a", "b"])
+        XCTAssertEqual(front.pages.first?.map(\.id), [folder.id, "d"])
+        XCTAssertEqual(FolderEditing.insertApp(layout: layout, appID: "missing", folderID: folder.id, at: 0), layout)
+
+        let only = AppFolder(id: "folder.only", name: "Folder", appIDs: ["a"])
+        let single = Layout(pages: [[.folder(only.id)]], folders: [only], metrics: twoByTwo)
+        let again = FolderEditing.insertApp(layout: single, appID: "a", folderID: only.id, at: 0)
+        XCTAssertEqual(again.folders.map(\.id), [only.id])
+        XCTAssertEqual(again.folders[0].appIDs, ["a"])
+        XCTAssertEqual(again.pages.first?.map(\.id), [only.id])
     }
 }

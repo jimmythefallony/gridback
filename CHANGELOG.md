@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- You can now rearrange apps inside an open folder.
 - The grid now fades and zooms gently when it opens and closes, like Launchpad.
 - Swiping between pages now responds to quick flicks and settles more smoothly.
 - After a folder is allowed in System Settings, opening the grid shows the blurred wallpaper even when GridBack Settings is closed.

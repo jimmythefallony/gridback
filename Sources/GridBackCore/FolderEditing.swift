@@ -279,7 +279,7 @@ public struct HeldDrag: Equatable, Sendable {
     public enum Phase: Equatable, Sendable {
         case idle
         case grid(appID: String)
-        case insideFolder(appID: String, folderID: String)
+        case insideFolder(appID: String, folderID: String, index: Int)
         case extracted(appID: String, folderID: String)
         case inserting(appID: String, folderID: String, index: Int)
     }
@@ -288,6 +288,7 @@ public struct HeldDrag: Equatable, Sendable {
         case none
         case reorder
         case insert(appID: String, folderID: String, index: Int)
+        case moveInFolder(appID: String, folderID: String, index: Int)
     }
 
     public struct Cancellation: Equatable, Sendable {
@@ -307,7 +308,7 @@ public struct HeldDrag: Equatable, Sendable {
         switch phase {
         case .idle:
             return nil
-        case .grid(let appID), .insideFolder(let appID, _), .extracted(let appID, _), .inserting(let appID, _, _):
+        case .grid(let appID), .insideFolder(let appID, _, _), .extracted(let appID, _), .inserting(let appID, _, _):
             return appID
         }
     }
@@ -320,14 +321,19 @@ public struct HeldDrag: Equatable, Sendable {
         phase = .grid(appID: appID)
     }
 
-    public mutating func pickInsideFolder(appID: String, folderID: String, origin: Layout) {
+    public mutating func pickInsideFolder(appID: String, folderID: String, index: Int, origin: Layout) {
         suppressCommit = false
         self.origin = origin
-        phase = .insideFolder(appID: appID, folderID: folderID)
+        phase = .insideFolder(appID: appID, folderID: folderID, index: index)
+    }
+
+    public mutating func updateFolderIndex(_ index: Int) {
+        guard case .insideFolder(let appID, let folderID, _) = phase else { return }
+        phase = .insideFolder(appID: appID, folderID: folderID, index: index)
     }
 
     public mutating func markExtracted() {
-        guard case .insideFolder(let appID, let folderID) = phase else { return }
+        guard case .insideFolder(let appID, let folderID, _) = phase else { return }
         phase = .extracted(appID: appID, folderID: folderID)
     }
 
@@ -390,8 +396,8 @@ public struct HeldDrag: Equatable, Sendable {
             outcome = .none
         case .grid, .extracted:
             outcome = .reorder
-        case .insideFolder:
-            outcome = .none
+        case .insideFolder(let appID, let folderID, let index):
+            outcome = .moveInFolder(appID: appID, folderID: folderID, index: index)
         case .inserting(let appID, let folderID, let index):
             outcome = .insert(appID: appID, folderID: folderID, index: index)
         }
@@ -601,18 +607,37 @@ public enum FolderEditing {
         return ids
     }
 
-    /// Moves a loose app into an existing folder at `index`, shifting the apps already there.
-    /// The result is unchanged when the folder or the loose app is missing.
-    public static func insertApp(layout: Layout, appID: String, folderID: String, at index: Int) -> Layout {
-        guard layout.folder(folderID) != nil else { return layout }
-        guard let path = layout.indexPath(of: appID),
-              case .app = layout.pages[path.page][path.slot] else {
+    /// Moves `appID` to `index` inside a folder it already belongs to.
+    /// Unknown ids, and an app that is not in that folder, leave the layout unchanged.
+    public static func moveWithinFolder(layout: Layout, appID: String, folderID: String, to index: Int) -> Layout {
+        guard let folderIndex = layout.folders.firstIndex(where: { $0.id == folderID }),
+              let from = layout.folders[folderIndex].appIDs.firstIndex(of: appID) else {
             return layout
         }
+        var ids = layout.folders[folderIndex].appIDs
+        ids.remove(at: from)
+        let at = min(max(0, index), ids.count)
+        ids.insert(appID, at: at)
+        guard ids != layout.folders[folderIndex].appIDs else { return layout }
+        var updated = layout
+        updated.folders[folderIndex].appIDs = ids
+        return updated
+    }
+
+    /// Moves a loose app, or an app that already sits in a folder, into an existing folder at `index`.
+    /// Taking the app out and putting it back does not delete that folder.
+    /// The result is unchanged when the folder or the app is missing.
+    public static func insertApp(layout: Layout, appID: String, folderID: String, at index: Int) -> Layout {
+        guard layout.folder(folderID) != nil else { return layout }
         var pages = layout.pages
-        pages[path.page].remove(at: path.slot)
-        if pages[path.page].isEmpty {
-            pages.remove(at: path.page)
+        if let path = layout.indexPath(of: appID),
+           case .app = pages[path.page][path.slot] {
+            pages[path.page].remove(at: path.slot)
+            if pages[path.page].isEmpty {
+                pages.remove(at: path.page)
+            }
+        } else if !layout.folders.contains(where: { $0.appIDs.contains(appID) }) {
+            return layout
         }
         var folders = layout.folders
         for folderIndex in folders.indices {

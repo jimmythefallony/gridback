@@ -320,37 +320,41 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
-                if absorbingIntoFolder { return }
-                if model.heldDrag.suppressCommit {
-                    abandonDragVisuals()
+                if self.absorbingIntoFolder { return }
+                if self.model.heldDrag.suppressCommit {
+                    self.abandonDragVisuals()
                     return
                 }
-                switch model.resolveHoverRelease(insideContent: pointerIsInsideFolderContent(finger)) {
+                switch self.model.resolveHoverRelease(insideContent: self.pointerIsInsideFolderContent(self.finger)) {
                 case .none:
-                    abandonDragVisuals()
+                    self.abandonDragVisuals()
                     return
                 case .insert(let appID, let folderID, let index):
-                    model.commitFolderInsert(appID: appID, folderID: folderID, index: index)
-                    abandonDragVisuals()
+                    self.model.commitFolderInsert(appID: appID, folderID: folderID, index: index)
+                    self.abandonDragVisuals()
+                    return
+                case .moveInFolder(let appID, let folderID, let index):
+                    self.model.commitFolderReorder(appID: appID, folderID: folderID, index: index)
+                    self.abandonDragVisuals()
                     return
                 case .reorder:
                     break
                 }
-                if folderDragID != nil && !folderHandoff {
-                    clearFolderDrag()
+                if self.folderDragID != nil && !self.folderHandoff {
+                    self.clearFolderDrag()
                     return
                 }
-                if folderHandoff {
-                    if pointerHandoff.isTracking { return }
-                    finishHandoff()
+                if self.folderHandoff {
+                    if self.pointerHandoff.isTracking { return }
+                    self.finishHandoff()
                     return
                 }
-                armClock.stop()
-                if let reorder {
-                    if let armedTarget,
-                       model.layout.folder(armedTarget) != nil,
-                       model.openFolderID != armedTarget {
-                        absorbIntoClosedFolder(
+                self.armClock.stop()
+                if let reorder = self.reorder {
+                    if let armedTarget = self.armedTarget,
+                       self.model.layout.folder(armedTarget) != nil,
+                       self.model.openFolderID != armedTarget {
+                        self.absorbIntoClosedFolder(
                             appID: reorder.appID,
                             folderID: armedTarget,
                             layout: layout,
@@ -358,16 +362,16 @@ struct OverlayRootView: View {
                         )
                         return
                     }
-                    if let armedTarget {
-                        model.group(draggedAppID: reorder.appID, targetID: armedTarget)
+                    if let armedTarget = self.armedTarget {
+                        self.model.group(draggedAppID: reorder.appID, targetID: armedTarget)
                     } else {
-                        model.commitReorder(reorder.preview, page: reorder.page)
+                        self.model.commitReorder(reorder.preview, page: reorder.page)
                     }
                 }
-                let session = reorder
-                releaseDragChrome()
-                settleReleasedIcon(session, layout: layout)
-                clearArmedDrag()
+                let session = self.reorder
+                self.releaseDragChrome()
+                self.settleReleasedIcon(session, layout: layout)
+                self.clearArmedDrag()
             }
     }
 
@@ -605,8 +609,13 @@ struct OverlayRootView: View {
     }
 
     private func arrangedFolderIDs(_ folder: AppFolder) -> [String] {
-        guard showingInsertionGap, insertingIntoFolder == folder.id, let appID = reorder?.appID else { return folder.appIDs }
-        return FolderEditing.previewOrder(existing: folder.appIDs, appID: appID, index: insertIndex)
+        if showingInsertionGap, insertingIntoFolder == folder.id, let appID = reorder?.appID {
+            return FolderEditing.previewOrder(existing: folder.appIDs, appID: appID, index: insertIndex)
+        }
+        if !folderHandoff, let appID = folderDragID, folder.id == model.openFolderID, folder.appIDs.contains(appID) {
+            return FolderEditing.previewOrder(existing: folder.appIDs, appID: appID, index: insertIndex)
+        }
+        return folder.appIDs
     }
 
     private func pointerIsInsideFolderContent(_ point: CGPoint) -> Bool {
@@ -744,30 +753,59 @@ struct OverlayRootView: View {
             guard let folder = model.layout.folder(model.openFolderID ?? ""),
                   let id = folderAppID(at: value.startLocation, folder: folder, layout: layout) else { return }
             folderDragID = id
-            model.beginHeldFolderDrag(appID: id, folderID: folder.id)
+            let start = folder.appIDs.firstIndex(of: id) ?? 0
+            insertIndex = start
+            model.beginHeldFolderDrag(appID: id, folderID: folder.id, index: start)
             dragSettled = false
             blockLaunch = true
             pointerHandoff.onMove = { [self] point in
-                finger = point
-                dragLayout = layout
-                if folderHandoff {
-                    updateReorder(at: point, layout: layout)
+                self.finger = point
+                self.dragLayout = layout
+                if self.folderHandoff {
+                    self.updateReorder(at: point, layout: layout)
                 } else {
-                    beginFolderHandoffIfNeeded(at: point, layout: layout)
+                    self.trackInsideFolderReorder(at: point, layout: layout)
+                    self.beginFolderHandoffIfNeeded(at: point, layout: layout)
                 }
             }
             pointerHandoff.onUp = { [self] _ in
-                if folderHandoff {
-                    finishHandoff()
+                if self.folderHandoff {
+                    self.finishHandoff()
                 } else {
-                    clearFolderDrag()
+                    self.commitInsideFolderDropIfNeeded()
+                    self.clearFolderDrag()
                 }
             }
             pointerHandoff.start()
         }
         finger = value.location
         dragLayout = layout
+        trackInsideFolderReorder(at: value.location, layout: layout)
         beginFolderHandoffIfNeeded(at: value.location, layout: layout)
+    }
+
+    /// The held app stays in the folder count, so a one-row panel and a taller one share this gap.
+    private func trackInsideFolderReorder(at point: CGPoint, layout: LaunchGridLayout) {
+        guard folderDragID != nil, !folderHandoff, folderPanel != .zero,
+              let folder = model.layout.folder(model.openFolderID ?? "") else { return }
+        let metrics = Self.folderMetrics(layout: layout, appCount: folder.appIDs.count)
+        let index = FolderPanelMetrics.insertionIndex(
+            localX: Double(point.x) - Double(folderPanel.minX),
+            localY: Double(point.y) - Double(folderPanel.minY),
+            slotCount: folder.appIDs.count,
+            open: metrics
+        )
+        insertIndex = index
+        model.updateHeldFolderIndex(index)
+    }
+
+    private func commitInsideFolderDropIfNeeded() {
+        guard !model.heldDrag.suppressCommit else { return }
+        guard case .insideFolder = model.heldDrag.phase else { return }
+        guard case .moveInFolder(let appID, let folderID, let index) = model.resolveHoverRelease(
+            insideContent: pointerIsInsideFolderContent(finger)
+        ) else { return }
+        model.commitFolderReorder(appID: appID, folderID: folderID, index: index)
     }
 
     private func beginFolderHandoffIfNeeded(at point: CGPoint, layout: LaunchGridLayout) {
