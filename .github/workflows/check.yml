@@ -3,6 +3,14 @@ name: Check
 on:
   pull_request:
   push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   no-network:
@@ -11,3 +19,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: No network connections
         run: ./scripts/check-no-network.sh
+
+  macos:
+    # Newest free macOS runner. Xcode 27.2 is installed; 27.1 is the image default.
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Swift version
+        run: swift --version
+      - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          mkdir -p build
+          xcodebuild test -project GridBack.xcodeproj -scheme GridBack -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -resultBundlePath build/GridBack.xcresult
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GridBack.xcresult
+          path: build/GridBack.xcresult
+          retention-days: 7
+
+  linux:
+    # ubuntu-latest ships with Swift, so the package can build off a Mac.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Test GridBackCore
+        run: swift test
