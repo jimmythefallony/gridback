@@ -31,6 +31,9 @@ final class GridBackModel: ObservableObject {
     @Published private(set) var shortcut: ShortcutChord
     @Published var heldDrag = HeldDrag() {
         didSet {
+            if oldValue.isActive, !heldDrag.isActive {
+                Issue4Log.dragEnded(kind: Issue4Log.kind(of: oldValue.phase), escapeRan: heldDrag.suppressCommit)
+            }
             if oldValue.isActive, !heldDrag.isActive, !pointerDragActive {
                 delegate?.gridBackDragEnded()
             }
@@ -426,12 +429,14 @@ final class GridBackModel: ObservableObject {
         var drag = heldDrag
         drag.beginGrid(appID: appID, origin: layout)
         heldDrag = drag
+        Issue4Log.dragStarted(kind: "grid")
     }
 
     func beginHeldFolderDrag(appID: String, folderID: String, index: Int) {
         var drag = heldDrag
         drag.pickInsideFolder(appID: appID, folderID: folderID, index: index, origin: layout)
         heldDrag = drag
+        Issue4Log.dragStarted(kind: "inside folder")
     }
 
     func updateHeldFolderIndex(_ index: Int) {
@@ -441,9 +446,13 @@ final class GridBackModel: ObservableObject {
     }
 
     func noteHeldExtracted() {
+        let before = heldDrag.phase
         var drag = heldDrag
         drag.markExtracted()
         heldDrag = drag
+        if case .insideFolder = before, case .extracted = heldDrag.phase {
+            Issue4Log.dragNow(kind: "drag out of folder")
+        }
     }
 
     func beginHeldInsertion(folderID: String, index: Int) {

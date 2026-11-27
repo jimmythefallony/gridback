@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import GridBackCore
 import QuartzCore
 
@@ -56,6 +57,196 @@ final class OverlayPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// Notes a key, then passes the event on unchanged.
+    override func sendEvent(_ event: NSEvent) {
+        Issue4Log.notePanelSendEvent(event)
+        super.sendEvent(event)
+    }
+}
+
+/// Temporary prints. Does not change the drag or read the event queue.
+enum Issue4Log {
+    private static var didLogTrust = false
+    private static var didLogStack = false
+    private static var didLogGestureChange = false
+
+    static func dragStarted(kind: String) {
+        Self.didLogStack = false
+        Self.didLogGestureChange = false
+        Self.logTrustOnce()
+        print("[#4] drag start kind=\(kind) \(Self.focus())")
+    }
+
+    static func dragNow(kind: String) {
+        print("[#4] drag now kind=\(kind)")
+    }
+
+    static func dragEnded(kind: String, escapeRan: Bool) {
+        let escape = escapeRan ? "yes" : "no"
+        let mouseUpTs = Self.mouseUpTimestamp()
+        print("[#4] drag end kind=\(kind) escape=\(escape) mouseUpTs=\(mouseUpTs)")
+    }
+
+    static func keyDown(place: String, code: UInt16, timestamp: TimeInterval, dragActive: Bool) {
+        let active = dragActive ? "yes" : "no"
+        let ts = Self.stamp(timestamp)
+        print("[#4] keyDown where=\(place) code=\(code) ts=\(ts) dragActive=\(active)")
+    }
+
+    static func globalEscape() {
+        print("[#4] global keyDown keyCode=53 \(Self.focus())")
+    }
+
+    static func handoffStart() {
+        print("[#4] handoff start")
+    }
+
+    static func handoffStop() {
+        print("[#4] handoff stop")
+    }
+
+    static func handoffDragged(timestamp: TimeInterval) {
+        let ts = Self.stamp(timestamp)
+        print("[#4] handoff dragged ts=\(ts)")
+    }
+
+    static func handoffMouseUp(timestamp: TimeInterval) {
+        let ts = Self.stamp(timestamp)
+        print("[#4] handoff mouseUp ts=\(ts)")
+    }
+
+    static func gestureChangedFirst() {
+        guard !Self.didLogGestureChange else { return }
+        Self.didLogGestureChange = true
+        let ts = Self.currentEventTimestamp()
+        print("[#4] gesture onChanged first ts=\(ts)")
+    }
+
+    static func gestureEnded() {
+        let ts = Self.currentEventTimestamp()
+        print("[#4] gesture onEnded ts=\(ts)")
+    }
+
+    static func notePanelSendEvent(_ event: NSEvent) {
+        guard event.type == .keyDown else { return }
+        Self.keyDown(
+            place: "panel",
+            code: event.keyCode,
+            timestamp: event.timestamp,
+            dragActive: GridBackModel.shared.heldDrag.isActive
+        )
+    }
+
+    /// The first move of a drag. Later moves in that drag print nothing.
+    static func stackOnce() {
+        guard !Self.didLogStack else { return }
+        Self.didLogStack = true
+        for frame in Self.stackFrames() {
+            print("[#4] stack \(frame)")
+        }
+    }
+
+    static func kind(of phase: HeldDrag.Phase) -> String {
+        switch phase {
+        case .idle:
+            return "idle"
+        case .grid:
+            return "grid"
+        case .insideFolder:
+            return "inside folder"
+        case .extracted:
+            return "drag out of folder"
+        case .inserting:
+            return "inserting"
+        }
+    }
+
+    private static func logTrustOnce() {
+        guard !Self.didLogTrust else { return }
+        Self.didLogTrust = true
+        // Reads the current answer. Does not prompt.
+        let answer = AXIsProcessTrusted() ? "yes" : "no"
+        print("[#4] accessibility trusted=\(answer)")
+    }
+
+    private static func focus() -> String {
+        let active = NSApp.isActive ? "yes" : "no"
+        let panelKey = Self.overlayIsKey() ? "yes" : "no"
+        return "active=\(active) key=\(Self.keyWindowLabel()) panelKey=\(panelKey)"
+    }
+
+    private static func keyWindowLabel() -> String {
+        guard let identifier = NSApp.keyWindow?.identifier?.rawValue else { return "none" }
+        if identifier == "GridBackOverlay" {
+            return "GridBackOverlay"
+        }
+        return "other"
+    }
+
+    private static func overlayIsKey() -> Bool {
+        for window in NSApp.windows where window.identifier?.rawValue == "GridBackOverlay" {
+            if window.isKeyWindow {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Same clock as a key event. A mouse-up is the event in hand; anything else is not one.
+    private static func mouseUpTimestamp() -> String {
+        guard let event = NSApp.currentEvent else { return "none" }
+        switch event.type {
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            return Self.stamp(event.timestamp)
+        default:
+            return "none"
+        }
+    }
+
+    private static func stamp(_ time: TimeInterval) -> String {
+        String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), time)
+    }
+
+    /// Same clock as a key. Nil when this callback is not inside an event.
+    private static func currentEventTimestamp() -> String {
+        guard let event = NSApp.currentEvent else { return "none" }
+        return Self.stamp(event.timestamp)
+    }
+
+    private static func stackFrames() -> [String] {
+        let specific = ["nextEvent", "NextEvent", "trackEvents", "runModal", "NSHostingView", "DragGesture"]
+        let needles = specific + ["track", "mouse", "Gesture"]
+        let rows: [(String, Bool)] = Thread.callStackSymbols.compactMap { raw in
+            let frame = Self.stripPaths(raw)
+            guard !frame.isEmpty, needles.contains(where: { frame.contains($0) }) else { return nil }
+            return (frame, specific.contains(where: { frame.contains($0) }))
+        }
+        let must = rows.filter { $0.1 }
+        if must.count >= 25 {
+            return must.suffix(25).map { $0.0 }
+        }
+        var room = 25 - must.count
+        var kept: [String] = []
+        for row in rows.reversed() {
+            if row.1 {
+                kept.append(row.0)
+            } else if room > 0 {
+                kept.append(row.0)
+                room -= 1
+            }
+        }
+        return Array(kept.reversed())
+    }
+
+    /// Drops tokens that contain a path. Symbol names stay.
+    private static func stripPaths(_ frame: String) -> String {
+        frame.split(whereSeparator: \.isWhitespace)
+            .filter { token in
+                !token.contains("/") && !token.contains("\\") && !token.contains("~")
+            }
+            .joined(separator: " ")
+    }
 }
 
 /// Full-screen picture behind the Dock. Level is one below the Dock, and the

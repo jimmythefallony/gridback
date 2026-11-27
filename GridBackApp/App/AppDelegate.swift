@@ -91,6 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
+            Issue4Log.keyDown(
+                place: "local",
+                code: event.keyCode,
+                timestamp: event.timestamp,
+                dragActive: self.model.heldDrag.isActive
+            )
             if self.settings.consumeRecordingKey(event) {
                 return nil
             }
