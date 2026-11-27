@@ -256,6 +256,7 @@ final class OverlayController: NSObject {
             DispatchQueue.main.async {
                 guard let self, self.wantsGrid else { return }
                 if self.model?.heldDrag.isActive == true {
+                    Issue4Log.globalEscape()
                     _ = self.model?.handleKeyDown(keyCode: 53, characters: "", modifiers: [])
                     return
                 }

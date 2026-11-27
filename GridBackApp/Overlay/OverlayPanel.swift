@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import GridBackCore
 import QuartzCore
 
@@ -56,6 +57,104 @@ final class OverlayPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// Sees a key while a drag is held, then passes the event on unchanged.
+    override func sendEvent(_ event: NSEvent) {
+        Issue4Log.notePanelSendEvent(event)
+        super.sendEvent(event)
+    }
+}
+
+/// Temporary prints while a drag is held. Does not change the drag or read the event queue.
+enum Issue4Log {
+    private static var didLogTrust = false
+    private static var runLoopModes: Set<String> = []
+
+    static func dragStarted(kind: String) {
+        Self.runLoopModes.removeAll()
+        Self.logTrustOnce()
+        print("[#4] drag start kind=\(kind) \(Self.focus())")
+    }
+
+    static func dragNow(kind: String) {
+        print("[#4] drag now kind=\(kind)")
+    }
+
+    static func dragEnded(kind: String, escapeRan: Bool) {
+        let escape = escapeRan ? "yes" : "no"
+        print("[#4] drag end kind=\(kind) escape=\(escape)")
+    }
+
+    static func localEscape() {
+        print("[#4] local keyDown keyCode=53 \(Self.focus())")
+    }
+
+    static func globalEscape() {
+        print("[#4] global keyDown keyCode=53 \(Self.focus())")
+    }
+
+    static func notePanelSendEvent(_ event: NSEvent) {
+        guard event.type == .keyDown else { return }
+        guard GridBackModel.shared.heldDrag.isActive else { return }
+        if event.keyCode == SearchKeyRouting.escapeKeyCode {
+            print("[#4] panel sendEvent keyDown keyCode=53 \(Self.focus())")
+        } else {
+            print("[#4] panel sendEvent keyDown keyCode=\(event.keyCode)")
+        }
+    }
+
+    /// One line per distinct mode during a drag, so a tracking loop shows up without a line every frame.
+    static func runLoopModeIfChanged() {
+        let mode = RunLoop.current.currentMode?.rawValue ?? "none"
+        guard Self.runLoopModes.insert(mode).inserted else { return }
+        print("[#4] runloop mode=\(mode)")
+    }
+
+    static func kind(of phase: HeldDrag.Phase) -> String {
+        switch phase {
+        case .idle:
+            return "idle"
+        case .grid:
+            return "grid"
+        case .insideFolder:
+            return "inside folder"
+        case .extracted:
+            return "drag out of folder"
+        case .inserting:
+            return "inserting"
+        }
+    }
+
+    private static func logTrustOnce() {
+        guard !Self.didLogTrust else { return }
+        Self.didLogTrust = true
+        // Reads the current answer. Does not prompt.
+        let answer = AXIsProcessTrusted() ? "yes" : "no"
+        print("[#4] accessibility trusted=\(answer)")
+    }
+
+    private static func focus() -> String {
+        let active = NSApp.isActive ? "yes" : "no"
+        let panelKey = Self.overlayIsKey() ? "yes" : "no"
+        return "active=\(active) key=\(Self.keyWindowLabel()) panelKey=\(panelKey)"
+    }
+
+    private static func keyWindowLabel() -> String {
+        guard let identifier = NSApp.keyWindow?.identifier?.rawValue else { return "none" }
+        if identifier == "GridBackOverlay" {
+            return "GridBackOverlay"
+        }
+        return "other"
+    }
+
+    private static func overlayIsKey() -> Bool {
+        for window in NSApp.windows where window.identifier?.rawValue == "GridBackOverlay" {
+            if window.isKeyWindow {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 /// Full-screen picture behind the Dock. Level is one below the Dock, and the

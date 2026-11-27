@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
+            if event.keyCode == SearchKeyRouting.escapeKeyCode, self.model.heldDrag.isActive {
+                Issue4Log.localEscape()
+            }
             if self.settings.consumeRecordingKey(event) {
                 return nil
             }
