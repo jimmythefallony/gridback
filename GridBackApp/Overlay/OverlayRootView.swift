@@ -1529,7 +1529,7 @@ enum Issue64Log {
         }
     }
 
-    static func folderOrders(_ layout: Layout) -> String {
+    static func folderOrders(_ layout: GridBackCore.Layout) -> String {
         guard !layout.folders.isEmpty else { return "none" }
         return layout.folders.map { folder in
             let apps = folder.appIDs.map { Self.token($0) }.joined(separator: ",")
