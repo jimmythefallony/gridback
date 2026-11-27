@@ -280,7 +280,10 @@ struct OverlayRootView: View {
     private func reorderGesture(layout: LaunchGridLayout, overlaySize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
-                defer { self.logIssue4StackIfNeeded() }
+                defer {
+                    self.logIssue4StackIfNeeded()
+                    self.logIssue4GestureChangedIfNeeded()
+                }
                 if absorbingIntoFolder { return }
                 if insertingIntoFolder != nil {
                     finger = value.location
@@ -321,6 +324,7 @@ struct OverlayRootView: View {
                 updateReorder(at: value.location, layout: layout)
             }
             .onEnded { _ in
+                Issue4Log.gestureEnded()
                 if self.absorbingIntoFolder { return }
                 if self.model.heldDrag.suppressCommit {
                     self.abandonDragVisuals()
@@ -380,6 +384,12 @@ struct OverlayRootView: View {
     private func logIssue4StackIfNeeded() {
         guard self.model.heldDrag.isActive else { return }
         Issue4Log.stackOnce()
+    }
+
+    /// Once, on the first move of a held drag. Same clock as a key.
+    private func logIssue4GestureChangedIfNeeded() {
+        guard self.model.heldDrag.isActive else { return }
+        Issue4Log.gestureChangedFirst()
     }
 
     /// Search and an open folder stay until the fade-out ends, so this waits with them.
@@ -1169,12 +1179,22 @@ private final class PointerHandoff: ObservableObject {
     var onMove: ((CGPoint) -> Void)?
     var onUp: ((CGPoint) -> Void)?
     private var monitor: Any?
+    private var loggedDrag = false
     var isTracking: Bool { monitor != nil }
 
     func start() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            guard let self, let window = event.window else { return event }
+        guard self.monitor == nil else { return }
+        self.loggedDrag = false
+        Issue4Log.handoffStart()
+        self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseUp {
+                Issue4Log.handoffMouseUp(timestamp: event.timestamp)
+            } else if !self.loggedDrag {
+                self.loggedDrag = true
+                Issue4Log.handoffDragged(timestamp: event.timestamp)
+            }
+            guard let window = event.window else { return event }
             let height = window.contentView?.bounds.height ?? window.frame.height
             let point = CGPoint(x: event.locationInWindow.x, y: height - event.locationInWindow.y)
             if event.type == .leftMouseUp {
@@ -1188,9 +1208,10 @@ private final class PointerHandoff: ObservableObject {
     }
 
     func stop() {
-        if let monitor {
+        if let monitor = self.monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
+            Issue4Log.handoffStop()
         }
     }
 }

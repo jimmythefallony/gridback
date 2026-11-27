@@ -69,9 +69,11 @@ final class OverlayPanel: NSPanel {
 enum Issue4Log {
     private static var didLogTrust = false
     private static var didLogStack = false
+    private static var didLogGestureChange = false
 
     static func dragStarted(kind: String) {
         Self.didLogStack = false
+        Self.didLogGestureChange = false
         Self.logTrustOnce()
         print("[#4] drag start kind=\(kind) \(Self.focus())")
     }
@@ -94,6 +96,36 @@ enum Issue4Log {
 
     static func globalEscape() {
         print("[#4] global keyDown keyCode=53 \(Self.focus())")
+    }
+
+    static func handoffStart() {
+        print("[#4] handoff start")
+    }
+
+    static func handoffStop() {
+        print("[#4] handoff stop")
+    }
+
+    static func handoffDragged(timestamp: TimeInterval) {
+        let ts = Self.stamp(timestamp)
+        print("[#4] handoff dragged ts=\(ts)")
+    }
+
+    static func handoffMouseUp(timestamp: TimeInterval) {
+        let ts = Self.stamp(timestamp)
+        print("[#4] handoff mouseUp ts=\(ts)")
+    }
+
+    static func gestureChangedFirst() {
+        guard !Self.didLogGestureChange else { return }
+        Self.didLogGestureChange = true
+        let ts = Self.currentEventTimestamp()
+        print("[#4] gesture onChanged first ts=\(ts)")
+    }
+
+    static func gestureEnded() {
+        let ts = Self.currentEventTimestamp()
+        print("[#4] gesture onEnded ts=\(ts)")
     }
 
     static func notePanelSendEvent(_ event: NSEvent) {
@@ -174,6 +206,12 @@ enum Issue4Log {
 
     private static func stamp(_ time: TimeInterval) -> String {
         String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), time)
+    }
+
+    /// Same clock as a key. Nil when this callback is not inside an event.
+    private static func currentEventTimestamp() -> String {
+        guard let event = NSApp.currentEvent else { return "none" }
+        return Self.stamp(event.timestamp)
     }
 
     private static func stackFrames() -> [String] {
