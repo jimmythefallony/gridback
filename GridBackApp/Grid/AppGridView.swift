@@ -336,7 +336,7 @@ private final class SearchPillTextField: NSTextField {
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         paintCaret()
-        DispatchQueue.main.async { [weak self] in self?.paintCaret() }
+        DispatchQueue.main.async { [weak self] in paintCaret() }
         return accepted
     }
 

@@ -1,3 +1,6 @@
+#if os(Linux)
+import AppKit
+#endif
 import Foundation
 
 /// One tile on the grid. A folder holds apps and cannot contain another folder.
