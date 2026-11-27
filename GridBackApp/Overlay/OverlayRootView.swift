@@ -174,7 +174,13 @@ struct OverlayRootView: View {
                 }
             }
             .coordinateSpace(name: "overlay")
-            .simultaneousGesture(reorderGesture(layout: chrome, overlaySize: overlay.size))
+            .modifier(SpikeOrFolderDrag(
+                folderOpen: model.openFolderID != nil,
+                gesture: reorderGesture(layout: chrome, overlaySize: overlay.size),
+                hitIcon: { event in
+                    self.spikeHitsIcon(event, layout: chrome)
+                }
+            ))
             .background {
                 ScrollCatcher(isEnabled: reorder == nil && !model.isSearching && model.openFolderID == nil) { event in
                     handleScroll(event, pageWidth: chrome.pageWidth, pageCount: model.layout.pages.count)
@@ -658,6 +664,15 @@ struct OverlayRootView: View {
             availableHeight: layout.gridHeight,
             appCount: appCount
         )
+    }
+
+    /// A closed-grid app icon. Folders stay on the gesture path.
+    private func spikeHitsIcon(_ event: NSEvent, layout: LaunchGridLayout) -> Bool {
+        guard !self.model.isSearching else { return false }
+        let height = event.window?.contentView?.bounds.height ?? 0
+        let point = CGPoint(x: event.locationInWindow.x, y: height - event.locationInWindow.y)
+        guard let id = self.iconID(at: point, layout: layout) else { return false }
+        return self.model.layout.folder(id) == nil
     }
 
     private func iconID(at point: CGPoint, layout: LaunchGridLayout) -> String? {
@@ -1451,6 +1466,71 @@ private struct FolderPanelFrameKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let next = nextValue()
         if next != .zero { value = next }
+    }
+}
+
+private struct SpikeOrFolderDrag<G: Gesture>: ViewModifier {
+    var folderOpen: Bool
+    var gesture: G
+    var hitIcon: (NSEvent) -> Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if self.folderOpen {
+            content.simultaneousGesture(self.gesture)
+        } else {
+            content.background { SpikeCatcher(hitIcon: self.hitIcon) }
+        }
+    }
+}
+
+private struct SpikeCatcher: NSViewRepresentable {
+    var hitIcon: (NSEvent) -> Bool
+    func makeNSView(context: Context) -> SpikeView {
+        let view = SpikeView()
+        view.hitIcon = self.hitIcon
+        return view
+    }
+    func updateNSView(_ view: SpikeView, context: Context) { view.hitIcon = self.hitIcon }
+}
+
+private final class SpikeView: NSView {
+    var hitIcon: ((NSEvent) -> Bool)?
+    private var monitor: Any?
+    private var active = false
+    private var loggedDrag = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let monitor = self.monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        guard self.window != nil else { return }
+        Issue4Log.endSpike = { [weak self] in self?.active = false; self?.loggedDrag = false }
+        self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            self?.take(event)
+            return event
+        }
+    }
+
+    deinit {
+        if let monitor = self.monitor { NSEvent.removeMonitor(monitor) }
+        Issue4Log.spikeActive = false
+        Issue4Log.endSpike = nil
+    }
+
+    private func take(_ event: NSEvent) {
+        guard event.window?.identifier?.rawValue == "GridBackOverlay" else { return }
+        if event.type == .leftMouseDown, self.hitIcon?(event) == true {
+            self.active = true
+            self.loggedDrag = false
+            Issue4Log.spike("mouseDown", timestamp: event.timestamp, begin: true)
+        } else if event.type == .leftMouseDragged, self.active, !self.loggedDrag {
+            self.loggedDrag = true
+            Issue4Log.spike("dragged first", timestamp: event.timestamp)
+        } else if event.type == .leftMouseUp, self.active {
+            self.active = false
+            Issue4Log.spike("mouseUp", timestamp: event.timestamp, end: true)
+        }
     }
 }
 
