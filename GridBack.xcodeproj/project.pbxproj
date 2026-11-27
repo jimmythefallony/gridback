@@ -159,6 +159,18 @@
 			isa = PBXBuildFile;
 			fileRef = B7E4A1C90D2F48A6B3C5D7E1;
 		};
+		BF8924FA08A2329CED87E057 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = F834C60F8718B8D31BCAB631;
+		};
+		61F0B40C912B2E8106FE3098 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = 682849496A3E032AD77D2532;
+		};
+		6E5833416F6A44260806B12A /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = 43247FE0B455C5ECB8C974B3;
+		};
 		0A0000000000000000000019 /* PBXBuildFile */ = {
 			isa = PBXBuildFile;
 			productRef = 0A0000000000000000000017;
@@ -414,6 +426,24 @@
 			path = GridFadeTests.swift;
 			sourceTree = "<group>";
 		};
+		F834C60F8718B8D31BCAB631 /* FolderAccessPolicyTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = FolderAccessPolicyTests.swift;
+			sourceTree = "<group>";
+		};
+		682849496A3E032AD77D2532 /* FolderAccessStatusTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = FolderAccessStatusTests.swift;
+			sourceTree = "<group>";
+		};
+		43247FE0B455C5ECB8C974B3 /* FolderExplainerTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = FolderExplainerTests.swift;
+			sourceTree = "<group>";
+		};
 		0A0000000000000000000014 /* GridBack.app */ = {
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
@@ -569,6 +599,9 @@
 				E4C91A7B2D8F46C0A1B29303,
 				A91C0E77F9B1C2D3E4F50611,
 				B7E4A1C90D2F48A6B3C5D7E1,
+				F834C60F8718B8D31BCAB631,
+				682849496A3E032AD77D2532,
+				43247FE0B455C5ECB8C974B3,
 			);
 			path = GridBackCoreTests;
 			sourceTree = "<group>";
@@ -745,6 +778,9 @@
 				E4C91A7B2D8F46C0A1B29304,
 				A91C0E77F9B1C2D3E4F50612,
 				B7E4A1C90D2F48A6B3C5D7E2,
+				BF8924FA08A2329CED87E057,
+				61F0B40C912B2E8106FE3098,
+				6E5833416F6A44260806B12A,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
