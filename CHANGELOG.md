@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Automatic build and test checks now run on every pull request.
 - You can now rearrange apps inside an open folder.
 - The grid now fades and zooms gently when it opens and closes, like Launchpad.
 - Swiping between pages now responds to quick flicks and settles more smoothly.
