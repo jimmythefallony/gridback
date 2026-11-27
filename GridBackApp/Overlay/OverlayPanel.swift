@@ -70,6 +70,8 @@ enum Issue4Log {
     private static var didLogTrust = false
     private static var didLogStack = false
     private static var didLogGestureChange = false
+    static var spikeActive = false
+    static var endSpike: (() -> Void)?
 
     static func dragStarted(kind: String) {
         Self.didLogStack = false
@@ -92,6 +94,21 @@ enum Issue4Log {
         let active = dragActive ? "yes" : "no"
         let ts = Self.stamp(timestamp)
         print("[#4] keyDown where=\(place) code=\(code) ts=\(ts) dragActive=\(active)")
+    }
+
+    static func spike(_ name: String, timestamp: TimeInterval, begin: Bool = false, end: Bool = false) {
+        if begin { Self.spikeActive = true }
+        if end { Self.spikeActive = false }
+        let ts = Self.stamp(timestamp)
+        print("[#4] spike \(name) ts=\(ts)")
+    }
+
+    static func noteSpikeEscape() {
+        guard Self.spikeActive else { return }
+        print("[#4] spike escape during drag")
+        Self.spikeActive = false
+        let end = Self.endSpike
+        end?()
     }
 
     static func globalEscape() {

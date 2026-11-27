@@ -97,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, GridBackUIDelegate {
                 timestamp: event.timestamp,
                 dragActive: self.model.heldDrag.isActive
             )
+            if event.keyCode == SearchKeyRouting.escapeKeyCode, Issue4Log.spikeActive {
+                Issue4Log.noteSpikeEscape()
+                return nil
+            }
             if self.settings.consumeRecordingKey(event) {
                 return nil
             }
