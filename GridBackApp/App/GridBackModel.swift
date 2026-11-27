@@ -428,9 +428,15 @@ final class GridBackModel: ObservableObject {
         heldDrag = drag
     }
 
-    func beginHeldFolderDrag(appID: String, folderID: String) {
+    func beginHeldFolderDrag(appID: String, folderID: String, index: Int) {
         var drag = heldDrag
-        drag.pickInsideFolder(appID: appID, folderID: folderID, origin: layout)
+        drag.pickInsideFolder(appID: appID, folderID: folderID, index: index, origin: layout)
+        heldDrag = drag
+    }
+
+    func updateHeldFolderIndex(_ index: Int) {
+        var drag = heldDrag
+        drag.updateFolderIndex(index)
         heldDrag = drag
     }
 
@@ -579,6 +585,13 @@ final class GridBackModel: ObservableObject {
         guard updated != layout else { return }
         layout = updated
         openFolderID = folderID
+        save()
+    }
+
+    func commitFolderReorder(appID: String, folderID: String, index: Int) {
+        let updated = FolderEditing.moveWithinFolder(layout: layout, appID: appID, folderID: folderID, to: index)
+        guard updated != layout else { return }
+        layout = updated
         save()
     }
 
