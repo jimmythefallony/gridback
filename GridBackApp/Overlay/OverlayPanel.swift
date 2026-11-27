@@ -58,20 +58,20 @@ final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    /// Sees a key while a drag is held, then passes the event on unchanged.
+    /// Notes a key, then passes the event on unchanged.
     override func sendEvent(_ event: NSEvent) {
         Issue4Log.notePanelSendEvent(event)
         super.sendEvent(event)
     }
 }
 
-/// Temporary prints while a drag is held. Does not change the drag or read the event queue.
+/// Temporary prints. Does not change the drag or read the event queue.
 enum Issue4Log {
     private static var didLogTrust = false
-    private static var runLoopModes: Set<String> = []
+    private static var didLogStack = false
 
     static func dragStarted(kind: String) {
-        Self.runLoopModes.removeAll()
+        Self.didLogStack = false
         Self.logTrustOnce()
         print("[#4] drag start kind=\(kind) \(Self.focus())")
     }
@@ -82,11 +82,14 @@ enum Issue4Log {
 
     static func dragEnded(kind: String, escapeRan: Bool) {
         let escape = escapeRan ? "yes" : "no"
-        print("[#4] drag end kind=\(kind) escape=\(escape)")
+        let mouseUpTs = Self.mouseUpTimestamp()
+        print("[#4] drag end kind=\(kind) escape=\(escape) mouseUpTs=\(mouseUpTs)")
     }
 
-    static func localEscape() {
-        print("[#4] local keyDown keyCode=53 \(Self.focus())")
+    static func keyDown(place: String, code: UInt16, timestamp: TimeInterval, dragActive: Bool) {
+        let active = dragActive ? "yes" : "no"
+        let ts = Self.stamp(timestamp)
+        print("[#4] keyDown where=\(place) code=\(code) ts=\(ts) dragActive=\(active)")
     }
 
     static func globalEscape() {
@@ -95,19 +98,21 @@ enum Issue4Log {
 
     static func notePanelSendEvent(_ event: NSEvent) {
         guard event.type == .keyDown else { return }
-        guard GridBackModel.shared.heldDrag.isActive else { return }
-        if event.keyCode == SearchKeyRouting.escapeKeyCode {
-            print("[#4] panel sendEvent keyDown keyCode=53 \(Self.focus())")
-        } else {
-            print("[#4] panel sendEvent keyDown keyCode=\(event.keyCode)")
-        }
+        Self.keyDown(
+            place: "panel",
+            code: event.keyCode,
+            timestamp: event.timestamp,
+            dragActive: GridBackModel.shared.heldDrag.isActive
+        )
     }
 
-    /// One line per distinct mode during a drag, so a tracking loop shows up without a line every frame.
-    static func runLoopModeIfChanged() {
-        let mode = RunLoop.current.currentMode?.rawValue ?? "none"
-        guard Self.runLoopModes.insert(mode).inserted else { return }
-        print("[#4] runloop mode=\(mode)")
+    /// The first move of a drag. Later moves in that drag print nothing.
+    static func stackOnce() {
+        guard !Self.didLogStack else { return }
+        Self.didLogStack = true
+        for frame in Self.stackFrames() {
+            print("[#4] stack \(frame)")
+        }
     }
 
     static func kind(of phase: HeldDrag.Phase) -> String {
@@ -154,6 +159,55 @@ enum Issue4Log {
             }
         }
         return false
+    }
+
+    /// Same clock as a key event. A mouse-up is the event in hand; anything else is not one.
+    private static func mouseUpTimestamp() -> String {
+        guard let event = NSApp.currentEvent else { return "none" }
+        switch event.type {
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            return Self.stamp(event.timestamp)
+        default:
+            return "none"
+        }
+    }
+
+    private static func stamp(_ time: TimeInterval) -> String {
+        String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), time)
+    }
+
+    private static func stackFrames() -> [String] {
+        let specific = ["nextEvent", "NextEvent", "trackEvents", "runModal", "NSHostingView", "DragGesture"]
+        let needles = specific + ["track", "mouse", "Gesture"]
+        let rows: [(String, Bool)] = Thread.callStackSymbols.compactMap { raw in
+            let frame = Self.stripPaths(raw)
+            guard !frame.isEmpty, needles.contains(where: { frame.contains($0) }) else { return nil }
+            return (frame, specific.contains(where: { frame.contains($0) }))
+        }
+        let must = rows.filter { $0.1 }
+        if must.count >= 25 {
+            return must.suffix(25).map { $0.0 }
+        }
+        var room = 25 - must.count
+        var kept: [String] = []
+        for row in rows.reversed() {
+            if row.1 {
+                kept.append(row.0)
+            } else if room > 0 {
+                kept.append(row.0)
+                room -= 1
+            }
+        }
+        return Array(kept.reversed())
+    }
+
+    /// Drops tokens that contain a path. Symbol names stay.
+    private static func stripPaths(_ frame: String) -> String {
+        frame.split(whereSeparator: \.isWhitespace)
+            .filter { token in
+                !token.contains("/") && !token.contains("\\") && !token.contains("~")
+            }
+            .joined(separator: " ")
     }
 }
 

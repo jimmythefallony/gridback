@@ -280,7 +280,7 @@ struct OverlayRootView: View {
     private func reorderGesture(layout: LaunchGridLayout, overlaySize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .named("overlay"))
             .onChanged { value in
-                defer { self.logIssue4RunLoopModeIfNeeded() }
+                defer { self.logIssue4StackIfNeeded() }
                 if absorbingIntoFolder { return }
                 if insertingIntoFolder != nil {
                     finger = value.location
@@ -376,10 +376,10 @@ struct OverlayRootView: View {
             }
     }
 
-    /// The mode SwiftUI is in while this gesture runs. Once per distinct mode for the drag.
-    private func logIssue4RunLoopModeIfNeeded() {
+    /// Once, on the first move of a held drag.
+    private func logIssue4StackIfNeeded() {
         guard self.model.heldDrag.isActive else { return }
-        Issue4Log.runLoopModeIfChanged()
+        Issue4Log.stackOnce()
     }
 
     /// Search and an open folder stay until the fade-out ends, so this waits with them.
